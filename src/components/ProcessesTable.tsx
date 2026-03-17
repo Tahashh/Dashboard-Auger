@@ -92,13 +92,13 @@ export default function ProcessesTable({ processes, onUpdate }: ProcessesTablePr
                     {process.articolo_nome}
                   </td>
                   <td className="px-4 py-3 text-center text-slate-600">
-                    <span className="bg-slate-100 px-2 py-1 rounded text-xs font-mono font-bold">{process.taglio}</span>
+                    <span className={`px-2 py-1 rounded text-xs font-mono font-bold ${process.taglio < 0 ? 'bg-red-100 text-red-600' : 'bg-slate-100'}`}>{process.taglio}</span>
                   </td>
                   <td className="px-4 py-3 text-center text-slate-600">
-                    <span className="bg-slate-100 px-2 py-1 rounded text-xs font-mono font-bold">{process.piega}</span>
+                    <span className={`px-2 py-1 rounded text-xs font-mono font-bold ${process.piega < 0 ? 'bg-red-100 text-red-600' : 'bg-slate-100'}`}>{process.piega}</span>
                   </td>
                   <td className="px-4 py-3 text-center text-slate-600">
-                    <span className="bg-slate-100 px-2 py-1 rounded text-xs font-mono font-bold">{process.verniciatura}</span>
+                    <span className={`px-2 py-1 rounded text-xs font-mono font-bold ${process.verniciatura < 0 ? 'bg-red-100 text-red-600' : 'bg-slate-100'}`}>{process.verniciatura}</span>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

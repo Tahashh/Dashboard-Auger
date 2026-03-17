@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#0f172a"/>
+  <!-- Shield -->
+  <path d="M256 64 L128 120 V256 C128 360 180 440 256 480 C332 440 384 360 384 256 V120 Z" fill="#1e293b" stroke="#3b82f6" stroke-width="32" stroke-linejoin="round"/>
+  <!-- Gear -->
+  <g stroke="#10b981" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="256" cy="256" r="48" fill="none"/>
+    <path d="M256 160 V208 M256 304 V352 M160 256 H208 M304 256 H352 M188 188 L222 222 M290 290 L324 324 M188 324 L222 290 M290 222 L324 188"/>
+  </g>
+</svg>

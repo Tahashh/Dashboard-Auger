@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Article, AUTHORIZED_USERS } from '../types';
-import { Edit2, Check, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Article, Commitment, AUTHORIZED_USERS } from '../types';
+import { Edit2, Check, X, Info } from 'lucide-react';
 
 interface CommitmentsTableProps {
   articles: Article[];
@@ -11,8 +11,25 @@ interface CommitmentsTableProps {
 export default function CommitmentsTable({ articles, onUpdate, username }: CommitmentsTableProps) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [impegni, setImpegni] = useState<number>(0);
+  const [commitments, setCommitments] = useState<Commitment[]>([]);
 
   const isAuthorized = AUTHORIZED_USERS.includes(username);
+
+  const fetchCommitments = async () => {
+    try {
+      const res = await fetch('/api/commitments');
+      const data = await res.json();
+      setCommitments(data);
+    } catch (error) {
+      console.error("Error fetching commitments:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchCommitments();
+    const interval = setInterval(fetchCommitments, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleUpdate = async (article: Article) => {
     if (!isAuthorized) return;
@@ -41,6 +58,10 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
   // Sort articles by commitments (descending) to show most engaged items first
   const sortedArticles = [...articles].sort((a, b) => b.impegni_clienti - a.impegni_clienti);
 
+  const getArticleCommitments = (articleId: number) => {
+    return commitments.filter(c => c.articolo_id === articleId);
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
@@ -61,6 +82,8 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
           <tbody className="divide-y divide-slate-100">
             {sortedArticles.map((article) => {
               const isEditing = editingId === article.id;
+              const articleCommitments = getArticleCommitments(article.id);
+              const hasCommitments = articleCommitments.length > 0;
 
               if (isEditing) {
                 return (
@@ -88,17 +111,58 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
               }
 
               return (
-                <tr key={article.id} className="hover:bg-slate-50 transition-colors group">
-                  <td className="px-4 py-3 font-medium text-slate-900 truncate max-w-[120px]" title={article.nome}>
-                    {article.nome}
+                <tr key={article.id} className="hover:bg-slate-50 transition-colors group relative">
+                  <td className="px-4 py-3 font-medium text-slate-900 truncate max-w-[120px] group/tooltip cursor-help">
+                    <div className="flex items-center gap-1">
+                      <span className="truncate">{article.nome}</span>
+                      {hasCommitments && <Info className="h-3 w-3 text-slate-400" />}
+                    </div>
+                    
+                    {/* Tooltip */}
+                    {hasCommitments && (
+                      <div className="absolute left-4 top-full mt-1 z-50 hidden group-hover/tooltip:block w-72 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 border border-slate-700">
+                        <div className="font-bold mb-2 border-b border-slate-600 pb-1">Dettaglio Impegni</div>
+                        <ul className="space-y-2">
+                          {articleCommitments.map(c => (
+                            <li key={c.id} className="flex justify-between items-start">
+                              <div>
+                                <div className="font-medium text-emerald-400">{c.cliente}</div>
+                                <div className="text-slate-400 font-mono text-[10px]">{c.commessa}</div>
+                                <div className="text-[10px] mt-0.5 text-slate-300">Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span></div>
+                              </div>
+                              <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono font-bold text-slate-700">
+                  <td className="px-4 py-3 text-right font-mono font-bold text-slate-700 group/tooltip cursor-help">
                     {article.impegni_clienti > 0 ? (
                       <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-xs">
                         {article.impegni_clienti}
                       </span>
                     ) : (
                       <span className="text-slate-400">0</span>
+                    )}
+                    
+                    {/* Tooltip for number as well */}
+                    {hasCommitments && (
+                      <div className="absolute right-16 top-full mt-1 z-50 hidden group-hover/tooltip:block w-72 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 border border-slate-700 text-left">
+                        <div className="font-bold mb-2 border-b border-slate-600 pb-1">Dettaglio Impegni</div>
+                        <ul className="space-y-2">
+                          {articleCommitments.map(c => (
+                            <li key={c.id} className="flex justify-between items-start">
+                              <div>
+                                <div className="font-medium text-emerald-400">{c.cliente}</div>
+                                <div className="text-slate-400 font-mono text-[10px]">{c.commessa}</div>
+                                <div className="text-[10px] mt-0.5 text-slate-300">Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span></div>
+                              </div>
+                              <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
                   </td>
                   {isAuthorized && (

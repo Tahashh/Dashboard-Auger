@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Client, AUTHORIZED_USERS } from '../types';
 import { Users, Plus, Edit2, Trash2, X, Check } from 'lucide-react';
 

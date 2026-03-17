@@ -1,14 +1,17 @@
 import { useState } from 'react';
-import { Article } from '../types';
+import { Article, Process, Commitment } from '../types';
 import { Plus, Trash2, Edit2, Check, X, Search } from 'lucide-react';
 import clsx from 'clsx';
+import { getDisponibilita } from '../utils';
 
 interface ArticlesTableProps {
   articles: Article[];
+  commitments: Commitment[];
+  processes: Process[];
   onUpdate: () => void;
 }
 
-export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps) {
+export default function ArticlesTable({ articles, commitments, processes, onUpdate }: ArticlesTableProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -17,7 +20,8 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
     nome: '',
     codice: '',
     verniciati: 0,
-    impegni_clienti: 0
+    impegni_clienti: 0,
+    scorta: 10
   });
 
   const filteredArticles = articles.filter(a => 
@@ -33,7 +37,7 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
         body: JSON.stringify(formData)
       });
       setIsAdding(false);
-      setFormData({ nome: '', codice: '', verniciati: 0, impegni_clienti: 0 });
+      setFormData({ nome: '', codice: '', verniciati: 0, impegni_clienti: 0, scorta: 10 });
       onUpdate();
     } catch (error) {
       console.error("Error adding article:", error);
@@ -70,7 +74,8 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
       nome: article.nome,
       codice: article.codice,
       verniciati: article.verniciati,
-      impegni_clienti: article.impegni_clienti
+      impegni_clienti: article.impegni_clienti,
+      scorta: article.scorta
     });
   };
 
@@ -83,7 +88,7 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
         `"${a.codice}"`,
         a.verniciati,
         a.impegni_clienti,
-        a.verniciati - a.impegni_clienti
+        getDisponibilita(a)
       ].join(','))
     ].join('\n');
 
@@ -146,6 +151,7 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
               <th className="px-4 py-3 font-semibold">Codice</th>
               <th className="px-4 py-3 font-semibold text-right">Verniciati</th>
               <th className="px-4 py-3 font-semibold text-right">Impegni</th>
+              <th className="px-4 py-3 font-semibold text-right">Scorta</th>
               <th className="px-4 py-3 font-semibold text-right">Disp.</th>
               <th className="px-4 py-3 font-semibold text-center w-16">Azioni</th>
             </tr>
@@ -165,8 +171,11 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
                 <td className="px-4 py-2">
                   <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.impegni_clienti} onChange={e => setFormData({...formData, impegni_clienti: parseInt(e.target.value) || 0})} />
                 </td>
+                <td className="px-4 py-2">
+                  <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" placeholder="Scorta" value={formData.scorta} onChange={e => setFormData({...formData, scorta: parseInt(e.target.value) || 0})} />
+                </td>
                 <td className="px-4 py-2 text-right font-mono text-slate-400">
-                  {formData.verniciati - formData.impegni_clienti}
+                  {getDisponibilita({ id: 0, nome: formData.nome, codice: formData.codice, verniciati: formData.verniciati, impegni_clienti: formData.impegni_clienti, piega: 0, scorta: formData.scorta })}
                 </td>
                 <td className="px-4 py-2">
                   <div className="flex items-center justify-center gap-2">
@@ -178,7 +187,7 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
             )}
 
             {filteredArticles.map((article) => {
-              const disponibilita = article.verniciati - article.impegni_clienti;
+              const disponibilita = getDisponibilita(article);
               const isNegative = disponibilita < 0;
               const isPositive = disponibilita > 0;
               const isEditing = editingId === article.id;
@@ -193,13 +202,23 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
                       <input type="text" className="w-full border border-slate-300 rounded px-2 py-1 text-sm" value={formData.codice} onChange={e => setFormData({...formData, codice: e.target.value})} />
                     </td>
                     <td className="px-4 py-2">
-                      <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.verniciati} onChange={e => setFormData({...formData, verniciati: parseInt(e.target.value) || 0})} />
+                      <input 
+                        type="number" 
+                        className={`w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right ${article.nome.toLowerCase().includes('piastra') ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
+                        value={formData.verniciati} 
+                        onChange={e => setFormData({...formData, verniciati: parseInt(e.target.value) || 0})} 
+                        disabled={article.nome.toLowerCase().includes('piastra')}
+                        title={article.nome.toLowerCase().includes('piastra') ? "Le piastre non vengono verniciate. Modifica la quantità in 'Piega' nei Processi Aziendali." : ""}
+                      />
                     </td>
                     <td className="px-4 py-2">
                       <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.impegni_clienti} onChange={e => setFormData({...formData, impegni_clienti: parseInt(e.target.value) || 0})} />
                     </td>
+                    <td className="px-4 py-2">
+                      <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.scorta} onChange={e => setFormData({...formData, scorta: parseInt(e.target.value) || 0})} />
+                    </td>
                     <td className="px-4 py-2 text-right font-mono text-slate-400">
-                      {formData.verniciati - formData.impegni_clienti}
+                      {getDisponibilita({...article, verniciati: formData.verniciati, impegni_clienti: formData.impegni_clienti, scorta: formData.scorta})}
                     </td>
                     <td className="px-4 py-2">
                       <div className="flex items-center justify-center gap-2">
@@ -220,10 +239,20 @@ export default function ArticlesTable({ articles, onUpdate }: ArticlesTableProps
                     {article.codice}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-slate-700">
-                    {article.verniciati}
+                    {article.nome.toLowerCase().includes('piastra') ? (
+                      <span className="text-slate-400" title="Le piastre non vengono verniciate. Disponibilità basata su 'Piega'.">-</span>
+                    ) : (
+                      article.verniciati
+                    )}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-slate-700">
+                  <td className={clsx(
+                    "px-4 py-3 text-right font-mono",
+                    article.impegni_clienti < 0 ? "bg-red-50 text-red-700" : "text-slate-700"
+                  )}>
                     {article.impegni_clienti}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-slate-400">
+                    {article.scorta}
                   </td>
                   <td className={clsx(
                     "px-4 py-3 text-right font-mono font-bold",
