@@ -1,25 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { Client, AUTHORIZED_USERS } from '../types';
+import { Client } from '../types';
 import { Users, Plus, Edit2, Trash2, X, Check } from 'lucide-react';
+import ConfirmModal from './ConfirmModal';
+import { fetchClients, addClient, updateClient, deleteClient } from '../api';
+import toast from 'react-hot-toast';
 
 interface ClientsViewProps {
   username: string;
+  isAuthorized: boolean;
 }
 
-export default function ClientsView({ username }: ClientsViewProps) {
+export default function ClientsView({ username, isAuthorized }: ClientsViewProps) {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [nome, setNome] = useState('');
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editNome, setEditNome] = useState('');
-  const [message, setMessage] = useState({ text: '', type: '' });
+  const [confirmModal, setConfirmModal] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
 
-  const isAuthorized = AUTHORIZED_USERS.includes(username);
-
-  const fetchClients = async () => {
+  const loadClients = async () => {
     try {
-      const res = await fetch('/api/clients');
-      const data = await res.json();
+      const data = await fetchClients();
       setClients(data);
     } catch (error) {
       console.error("Error fetching clients:", error);
@@ -29,7 +35,9 @@ export default function ClientsView({ username }: ClientsViewProps) {
   };
 
   useEffect(() => {
-    fetchClients();
+    loadClients();
+    const interval = setInterval(loadClients, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -37,62 +45,51 @@ export default function ClientsView({ username }: ClientsViewProps) {
     if (!isAuthorized || !nome.trim()) return;
 
     try {
-      const res = await fetch('/api/clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nome: nome.trim() })
+      await addClient({ 
+        nome: nome.trim(),
+        data_inserimento: new Date().toISOString()
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Errore durante la registrazione');
-
-      setMessage({ text: 'Cliente aggiunto con successo!', type: 'success' });
+      toast.success('Cliente aggiunto con successo!');
       setNome('');
-      fetchClients();
-      
-      setTimeout(() => setMessage({ text: '', type: '' }), 3000);
+      loadClients();
     } catch (error: any) {
-      setMessage({ text: error.message || 'Errore nella registrazione', type: 'error' });
+      console.error(error);
+      toast.error('Errore nella registrazione');
     }
   };
 
-  const handleUpdate = async (id: number) => {
+  const handleUpdate = async (id: string) => {
     if (!isAuthorized || !editNome.trim()) return;
 
     try {
-      const res = await fetch(`/api/clients/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nome: editNome.trim() })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Errore durante la modifica');
-
-      setMessage({ text: 'Cliente aggiornato con successo!', type: 'success' });
+      await updateClient(id, { nome: editNome.trim() });
+      toast.success('Cliente aggiornato con successo!');
       setEditingId(null);
-      fetchClients();
-      
-      setTimeout(() => setMessage({ text: '', type: '' }), 3000);
+      loadClients();
     } catch (error: any) {
-      setMessage({ text: error.message || 'Errore nella modifica', type: 'error' });
+      console.error(error);
+      toast.error('Errore nella modifica');
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!isAuthorized || !confirm('Sei sicuro di voler eliminare questo cliente?')) return;
+  const handleDelete = async (id: string) => {
+    if (!isAuthorized) return;
     
-    try {
-      const res = await fetch(`/api/clients/${id}`, {
-        method: 'DELETE'
-      });
-      
-      if (!res.ok) throw new Error('Errore durante l\'eliminazione');
-      
-      fetchClients();
-    } catch (error: any) {
-      alert(error.message);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Conferma Eliminazione',
+      message: 'Sei sicuro di voler eliminare questo cliente?',
+      onConfirm: async () => {
+        try {
+          await deleteClient(id);
+          toast.success('Cliente eliminato con successo!');
+          loadClients();
+        } catch (error: any) {
+          console.error(error);
+          toast.error('Errore durante l\'eliminazione');
+        }
+      }
+    });
   };
 
   const startEditing = (client: Client) => {
@@ -107,14 +104,22 @@ export default function ClientsView({ username }: ClientsViewProps) {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <>
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Form Section */}
-      <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-5 h-fit">
-        <div className="flex items-center gap-2 mb-6">
-          <div className="bg-indigo-100 p-2 rounded-lg">
-            <Users className="h-5 w-5 text-indigo-600" />
+      <div className="lg:col-span-1 bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-200/60 p-6 h-fit transition-all duration-300 hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)]">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="bg-gradient-to-br from-indigo-500 to-blue-600 p-2.5 rounded-xl shadow-sm">
+            <Users className="h-5 w-5 text-white" />
           </div>
-          <h2 className="text-lg font-bold text-slate-800">Nuovo Cliente</h2>
+          <h2 className="text-xl font-bold text-slate-800 tracking-tight">Nuovo Cliente</h2>
         </div>
 
         {!isAuthorized ? (
@@ -136,11 +141,6 @@ export default function ClientsView({ username }: ClientsViewProps) {
           </div>
 
             <div className="mt-2">
-              {message.text && (
-                <div className={`mb-3 p-2 rounded text-sm text-center font-medium ${message.type === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                  {message.text}
-                </div>
-              )}
               <button
                 type="submit"
                 disabled={!nome.trim()}
@@ -155,18 +155,20 @@ export default function ClientsView({ username }: ClientsViewProps) {
       </div>
 
       {/* Table Section */}
-      <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-        <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Users className="h-5 w-5 text-slate-600" />
-            <h2 className="font-bold text-slate-800">Anagrafica Clienti</h2>
+      <div className="lg:col-span-2 bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-200/60 overflow-hidden flex flex-col transition-all duration-300 hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)]">
+        <div className="p-5 border-b border-slate-200/80 bg-white/50 backdrop-blur-sm flex items-center justify-between rounded-t-xl">
+          <div className="flex items-center gap-3">
+            <div className="bg-gradient-to-br from-indigo-500 to-blue-600 p-2 rounded-lg shadow-sm">
+              <Users className="h-4 w-4 text-white" />
+            </div>
+            <h2 className="text-lg font-bold text-slate-800 tracking-tight">Anagrafica Clienti</h2>
           </div>
-          <div className="text-sm text-slate-500 font-medium">
+          <div className="text-sm text-slate-500 font-medium bg-slate-100 px-3 py-1 rounded-full">
             Totale: {clients.length}
           </div>
         </div>
 
-        <div className="overflow-x-auto flex-1">
+        <div className="overflow-x-auto flex-1 custom-scrollbar">
           {loading ? (
             <div className="flex items-center justify-center h-32">
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-slate-900"></div>
@@ -247,5 +249,6 @@ export default function ClientsView({ username }: ClientsViewProps) {
         </div>
       </div>
     </div>
+    </>
   );
 }

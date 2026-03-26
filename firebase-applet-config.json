@@ -1,10 +1,10 @@
 {
-  "projectId": "dashboardauger",
-  "appId": "1:488824644680:web:62c64f3979d3fba01a247d",
-  "apiKey": "AIzaSyAW9jqD7wepnCvs4OicYH4zgHiXT6-2Z9g",
-  "authDomain": "dashboardauger.firebaseapp.com",
+  "projectId": "gen-lang-client-0443443091",
+  "appId": "1:918014290557:web:87d2138b5633d90f401f14",
+  "apiKey": "AIzaSyCqMA-vOlc3VtjcyJNV6bdgjSANo_DV_8Q",
+  "authDomain": "gen-lang-client-0443443091.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-cad81a70-fdab-4e02-8192-ba3cf3ba8e6b",
-  "storageBucket": "dashboardauger.firebasestorage.app",
-  "messagingSenderId": "488824644680",
+  "storageBucket": "gen-lang-client-0443443091.firebasestorage.app",
+  "messagingSenderId": "918014290557",
   "measurementId": ""
 }

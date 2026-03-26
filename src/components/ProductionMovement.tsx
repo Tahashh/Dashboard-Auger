@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
 import { Article, Commitment } from '../types';
-import { ArrowRightLeft, Plus, Minus, Edit3, PackageCheck, X, AlertTriangle, CheckSquare, Square, Loader2 } from 'lucide-react';
+import { getCategory, isPhaseEnabled } from '../utils';
+import { ArrowRightLeft, Plus, Minus, Edit3, PackageCheck, X, AlertTriangle, CheckSquare, Square, Loader2, AlertCircle, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { toast } from 'react-hot-toast';
+import { fetchCommitments, fetchArticles, fetchProcesses, updateArticle, updateProcess, updateCommitment, addMovementLog } from '../api';
 
 interface CommitmentWithStock extends Commitment {
   verniciati: number;
   piega: number;
+  taglio: number;
+  saldatura: number;
 }
 
 interface ProductionMovementProps {
@@ -16,39 +20,86 @@ interface ProductionMovementProps {
 }
 
 export default function ProductionMovement({ articles, onUpdate, username }: ProductionMovementProps) {
-  const [articoloId, setArticoloId] = useState<string>('');
+  const [rows, setRows] = useState<{ articoloId: string; quantita: number | '' }[]>([{ articoloId: '', quantita: '' }]);
   const [fase, setFase] = useState<string>('taglio');
   const [tipo, setTipo] = useState<string>('carico');
-  const [quantita, setQuantita] = useState<number | ''>('');
   
   // Scarico Commessa state
   const [commessaDaScaricare, setCommessaDaScaricare] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [commessaItems, setCommessaItems] = useState<CommitmentWithStock[]>([]);
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState({ text: '', type: '' });
+
+  const addRow = () => {
+    setRows([...rows, { articoloId: '', quantita: '' }]);
+  };
+
+  const removeRow = (index: number) => {
+    if (rows.length > 1) {
+      const newRows = [...rows];
+      newRows.splice(index, 1);
+      setRows(newRows);
+    }
+  };
+
+  const updateRow = (index: number, field: 'articoloId' | 'quantita', value: any) => {
+    const newRows = [...rows];
+    newRows[index] = { ...newRows[index], [field]: value };
+    setRows(newRows);
+  };
 
   const handleOpenModal = async () => {
     if (!commessaDaScaricare) return;
     
     setLoading(true);
     try {
-      const res = await fetch(`/api/commitments/by-commessa/${encodeURIComponent(commessaDaScaricare)}`);
-      if (!res.ok) throw new Error('Errore nel recupero della commessa');
+      const allCommitments = await fetchCommitments();
+      const filteredCommitments = allCommitments.filter(c => c.commessa === commessaDaScaricare);
       
-      const data: CommitmentWithStock[] = await res.json();
-      if (data.length === 0) {
+      if (filteredCommitments.length === 0) {
         toast.error('Nessun impegno trovato per questa commessa');
         return;
+      }
+      
+      const allArticles = await fetchArticles();
+      const allProcesses = await fetchProcesses();
+      
+      const data: CommitmentWithStock[] = [];
+      for (const commitment of filteredCommitments) {
+        const article = allArticles.find(a => a.id === commitment.articolo_id);
+        const process = allProcesses.find(p => p.articolo_id === commitment.articolo_id);
+        
+        let verniciati = 0;
+        let piega = 0;
+        let taglio = 0;
+        let saldatura = 0;
+        
+        if (article) {
+          verniciati = article.verniciati || 0;
+        }
+        if (process) {
+          piega = process.piega || 0;
+          taglio = process.taglio || 0;
+          saldatura = process.saldatura || 0;
+        }
+        
+        data.push({
+          ...commitment,
+          verniciati,
+          piega,
+          taglio,
+          saldatura
+        });
       }
       
       setCommessaItems(data);
       setSelectedIds(data.map(item => item.id)); // Default all selected
       setShowModal(true);
     } catch (error: any) {
-      toast.error(error.message);
+      console.error(error);
+      toast.error(error.message || 'Errore nel recupero della commessa');
     } finally {
       setLoading(false);
     }
@@ -65,14 +116,34 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
       const item = commessaItems.find(i => i.id === id);
       if (!item) return null;
       
-      const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
-      const available = isPiastra ? item.piega : item.verniciati;
+      let available = 0;
+      let tipo = '';
+      const fase = item.fase_produzione?.toLowerCase() || 'generico';
+      
+      if (fase === 'taglio') {
+        available = item.taglio;
+        tipo = 'tagliati';
+      } else if (fase === 'piega') {
+        available = item.piega;
+        tipo = 'piegati';
+      } else if (fase === 'saldatura') {
+        available = item.saldatura;
+        tipo = 'saldati';
+      } else if (fase === 'verniciatura') {
+        available = item.verniciati;
+        tipo = 'verniciati';
+      } else {
+        // Generico
+        const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
+        available = isPiastra ? item.piega : item.verniciati;
+        tipo = isPiastra ? 'piegate' : 'verniciate';
+      }
       
       if (available < item.quantita) {
         return {
           nome: item.articolo_nome,
           mancanti: item.quantita - available,
-          tipo: isPiastra ? 'piegate' : 'verniciate'
+          tipo
         };
       }
       return null;
@@ -86,18 +157,116 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
 
     setLoading(true);
     try {
-      const res = await fetch('/api/commitments/fulfill-by-commessa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          commessa: commessaDaScaricare,
-          ids: selectedIds
-        })
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Errore durante lo scarico');
+      const allArticles = await fetchArticles();
+      const allProcesses = await fetchProcesses();
+      const itemsToFulfill = commessaItems.filter(item => selectedIds.includes(item.id));
+      
+      for (const item of itemsToFulfill) {
+        const articleData = allArticles.find(a => a.id === item.articolo_id);
+        const processData = allProcesses.find(p => p.articolo_id === item.articolo_id);
+        
+        if (!articleData) {
+          throw new Error(`Articolo non trovato: ${item.articolo_nome}`);
+        }
+        
+        const fase = item.fase_produzione?.toLowerCase() || 'generico';
+        
+        if (fase === 'taglio') {
+          if (!processData) throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
+          if (processData.taglio < item.quantita) throw new Error(`Stock taglio insufficiente per ${item.articolo_nome}`);
+          
+          await updateProcess(processData.id, {
+            taglio: processData.taglio - item.quantita
+          });
+        } else if (fase === 'piega') {
+          if (!processData) throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
+          if (processData.piega < item.quantita) throw new Error(`Stock piega insufficiente per ${item.articolo_nome}`);
+          
+          await updateProcess(processData.id, {
+            piega: processData.piega - item.quantita
+          });
+          await updateArticle(articleData.id, {
+            piega: Math.max(0, (articleData.piega || 0) - item.quantita)
+          });
+        } else if (fase === 'saldatura') {
+          if (!processData) throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
+          if (processData.saldatura < item.quantita) throw new Error(`Stock saldatura insufficiente per ${item.articolo_nome}`);
+          
+          await updateProcess(processData.id, {
+            saldatura: processData.saldatura - item.quantita
+          });
+        } else if (fase === 'verniciatura') {
+          if (articleData.verniciati < item.quantita) throw new Error(`Stock verniciati insufficiente per ${item.articolo_nome}`);
+          
+          await updateArticle(articleData.id, {
+            verniciati: articleData.verniciati - item.quantita
+          });
+          if (processData) {
+            await updateProcess(processData.id, {
+              verniciatura: Math.max(0, (processData.verniciatura || 0) - item.quantita)
+            });
+          }
+        } else {
+          // Generico
+          const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
+          
+          if (isPiastra) {
+            if (!processData) {
+              throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
+            }
+            
+            if (processData.piega < item.quantita) {
+              throw new Error(`Stock piega insufficiente per ${item.articolo_nome}`);
+            }
+            
+            await updateProcess(processData.id, {
+              piega: processData.piega - item.quantita
+            });
+            
+            await updateArticle(articleData.id, {
+              piega: (articleData.piega || 0) - item.quantita
+            });
+          } else {
+            if (articleData.verniciati < item.quantita) {
+              throw new Error(`Stock verniciati insufficiente per ${item.articolo_nome}`);
+            }
+            
+            await updateArticle(articleData.id, {
+              verniciati: articleData.verniciati - item.quantita
+            });
+            
+            if (processData) {
+              await updateProcess(processData.id, {
+                verniciatura: Math.max(0, (processData.verniciatura || 0) - item.quantita)
+              });
+            }
+          }
+        }
+        
+        // Update impegni_clienti
+        await updateArticle(articleData.id, {
+          impegni_clienti: Math.max(0, (articleData.impegni_clienti || 0) - item.quantita)
+        });
+        
+        // Mark commitment as completed
+        await updateCommitment(item.id, {
+          stato_lavorazione: 'Completato',
+          timestamp_modifica: new Date().toISOString()
+        });
+        
+        // Log movement
+        await addMovementLog({
+          articolo_id: item.articolo_id,
+          articolo_nome: item.articolo_nome,
+          articolo_codice: item.articolo_codice,
+          fase: 'impegni_evasione',
+          tipo: 'evasione',
+          quantita: item.quantita,
+          operatore: username || 'System',
+          timestamp: new Date().toISOString(),
+          cliente: item.cliente,
+          commessa: item.commessa
+        });
       }
 
       toast.success('Commessa evasa con successo!');
@@ -105,13 +274,14 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
       setShowModal(false);
       onUpdate();
     } catch (error: any) {
-      toast.error(error.message);
+      console.error(error);
+      toast.error(error.message || 'Errore durante lo scarico');
     } finally {
       setLoading(false);
     }
   };
 
-  const toggleSelection = (id: number) => {
+  const toggleSelection = (id: string) => {
     setSelectedIds(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
@@ -124,44 +294,56 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
       handleOpenModal();
       return;
     }
-
-    // Standard movement
-    if (!articoloId || !quantita) return;
+    
+    const validRows = rows.filter(r => r.articoloId && r.quantita);
+    if (validRows.length === 0) return;
 
     setLoading(true);
 
     try {
-      const res = await fetch('/api/movements', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          articolo_id: parseInt(articoloId),
+      const allArticles = await fetchArticles();
+      const allProcesses = await fetchProcesses();
+      
+      for (const row of validRows) {
+        const article = allArticles.find(a => a.codice === row.articoloId || a.id === row.articoloId);
+        if (!article) throw new Error(`Articolo non trovato: ${row.articoloId}`);
+        
+        const qty = parseInt(row.quantita.toString(), 10);
+        if (isNaN(qty) || qty < 0) throw new Error(`Quantità non valida per ${article.nome}`);
+
+        const processData = allProcesses.find(p => p.articolo_id === article.id);
+        if (!processData) throw new Error(`Processi non trovati per ${article.nome}`);
+
+        await addMovementLog({
+          articolo_id: article.id,
+          articolo_nome: article.nome,
+          articolo_codice: article.codice,
           fase,
           tipo,
-          quantita: parseInt(quantita.toString()),
-          operatore: username || 'System'
-        })
-      });
+          quantita: qty,
+          operatore: username || 'System',
+          timestamp: new Date().toISOString()
+        });
+      }
 
-      if (!res.ok) throw new Error('Errore durante la registrazione');
-
-      toast.success('Movimento registrato con successo!');
-      setQuantita('');
+      toast.success(`Movimento registrato con successo per ${validRows.length} articol${validRows.length === 1 ? 'o' : 'i'}!`);
+      setRows([{ articoloId: '', quantita: '' }]);
       onUpdate();
-    } catch (error) {
-      toast.error('Errore nella registrazione del movimento');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || 'Errore nella registrazione del movimento');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex flex-col h-full">
-      <div className="flex items-center gap-2 mb-6">
-        <div className="bg-blue-100 p-2 rounded-lg">
-          <ArrowRightLeft className="h-5 w-5 text-blue-600" />
+    <div className="bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-200/60 p-6 flex flex-col h-full transition-all duration-300 hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)]">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="bg-gradient-to-br from-indigo-500 to-blue-600 p-2.5 rounded-xl shadow-sm">
+          <ArrowRightLeft className="h-5 w-5 text-white" />
         </div>
-        <h2 className="text-lg font-bold text-slate-800">Registra Movimento</h2>
+        <h2 className="text-xl font-bold text-slate-800 tracking-tight">Registra Movimento</h2>
       </div>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 flex-1">
@@ -169,20 +351,12 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
           <label className="block text-sm font-medium text-slate-700 mb-1">Fase / Reparto</label>
           <select 
             value={fase}
-            onChange={(e) => {
-              const newFase = e.target.value;
-              setFase(newFase);
-              if (newFase === 'verniciatura' && articoloId) {
-                const selectedArticle = articles.find(a => a.id.toString() === articoloId);
-                if (selectedArticle?.nome.toLowerCase().includes('piastra')) {
-                  setArticoloId('');
-                }
-              }
-            }}
+            onChange={(e) => setFase(e.target.value)}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none"
           >
             <option value="taglio">Taglio</option>
-            <option value="piega">Piega</option>
+            <option value="piega">Piega (Gre.)</option>
+            <option value="saldatura">Saldatura</option>
             <option value="verniciatura">Verniciatura</option>
             <option value="impegni">Impegni Clienti (Scarico Commessa)</option>
           </select>
@@ -196,7 +370,7 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
             </div>
             <p className="text-xs text-indigo-600 mb-4">
               Inserisci il numero di commessa per evadere automaticamente tutti gli articoli associati.
-              I pezzi verranno scalati dalla disponibilità e dal magazzino verniciati.
+              I pezzi verranno scalati dalla disponibilità (dal magazzino verniciati, o piegati per le piastre).
             </p>
             <div>
               <label className="block text-sm font-medium text-indigo-900 mb-1">Numero Commessa</label>
@@ -212,34 +386,59 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
           </div>
         ) : (
           <>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Articolo</label>
-              <select 
-                value={articoloId}
-                onChange={(e) => setArticoloId(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none"
-                required
-              >
-                <option value="">Seleziona un articolo...</option>
-                {articles
-                  .filter(a => fase !== 'verniciatura' || !a.nome.toLowerCase().includes('piastra'))
-                  .map(a => (
-                  <option key={a.id} value={a.id}>{a.nome} ({a.codice})</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Quantità</label>
-              <input 
-                type="number" 
-                min="1"
-                value={quantita}
-                onChange={(e) => setQuantita(e.target.value === '' ? '' : parseInt(e.target.value))}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none"
-                placeholder="Es. 100"
-                required
-              />
+            <div className="flex-1 overflow-y-auto max-h-[300px] border border-slate-100 rounded-lg p-2 bg-slate-50/50">
+              <div className="flex items-center justify-between mb-2 px-1">
+                <h3 className="text-sm font-semibold text-slate-600">Articoli da Registrare</h3>
+                <button 
+                  type="button"
+                  onClick={addRow}
+                  className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700 flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" /> Aggiungi Riga
+                </button>
+              </div>
+              
+              {rows.map((row, index) => (
+                <div key={index} className="flex gap-2 mb-2 items-end bg-white p-2 rounded border border-slate-200 shadow-sm">
+                  <div className="flex-1">
+                    <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-0.5">Articolo</label>
+                    <input 
+                      list="articles-list-mov"
+                      value={row.articoloId}
+                      onChange={(e) => updateRow(index, 'articoloId', e.target.value)}
+                      className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-slate-900 outline-none"
+                      placeholder="Codice o nome"
+                      required
+                    />
+                    <datalist id="articles-list-mov">
+                      {articles.filter(a => isPhaseEnabled(getCategory(a.nome, a.codice), fase)).map(a => (
+                        <option key={a.id} value={a.codice}>{a.nome}</option>
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="w-24">
+                    <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-0.5">Quantità</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={row.quantita}
+                      onChange={(e) => updateRow(index, 'quantita', e.target.value === '' ? '' : parseInt(e.target.value))}
+                      className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-slate-900 outline-none"
+                      placeholder="Q.tà"
+                      required
+                    />
+                  </div>
+                  {rows.length > 1 && (
+                    <button 
+                      type="button"
+                      onClick={() => removeRow(index)}
+                      className="text-red-500 hover:text-red-700 p-1.5"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
 
             <div>
@@ -284,17 +483,9 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
         )}
 
         <div className="mt-auto pt-4">
-          {message.text && (
-            <div className={clsx(
-              "mb-3 p-2 rounded text-sm text-center font-medium",
-              message.type === 'success' ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-            )}>
-              {message.text}
-            </div>
-          )}
           <button
             type="submit"
-            disabled={loading || (fase === 'impegni' ? !commessaDaScaricare : (!articoloId || !quantita))}
+            disabled={loading || (fase === 'impegni' ? !commessaDaScaricare : rows.filter(r => r.articoloId && r.quantita).length === 0)}
             className={clsx(
               "w-full text-white font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
               fase === 'impegni' ? "bg-indigo-600 hover:bg-indigo-700" : "bg-slate-900 hover:bg-slate-800"
@@ -346,8 +537,26 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
                 
                 {commessaItems.map((item) => {
                   const isSelected = selectedIds.includes(item.id);
-                  const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
-                  const available = isPiastra ? item.piega : item.verniciati;
+                  const fase = item.fase_produzione?.toLowerCase() || 'generico';
+                  let available = 0;
+                  let tipo = '';
+                  if (fase === 'taglio') {
+                    available = item.taglio;
+                    tipo = 'tagliati';
+                  } else if (fase === 'piega') {
+                    available = item.piega;
+                    tipo = 'piegati';
+                  } else if (fase === 'saldatura') {
+                    available = item.saldatura;
+                    tipo = 'saldati';
+                  } else if (fase === 'verniciatura') {
+                    available = item.verniciati;
+                    tipo = 'verniciati';
+                  } else {
+                    const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
+                    available = isPiastra ? item.piega : item.verniciati;
+                    tipo = isPiastra ? 'piegate' : 'verniciate';
+                  }
                   const hasStock = available >= item.quantita;
 
                   return (
@@ -382,7 +591,7 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
                           "text-xs font-bold",
                           hasStock ? "text-emerald-600" : "text-red-600"
                         )}>
-                          {available} pz {isPiastra ? '(Gre.)' : '(Ver.)'}
+                          {available} pz {tipo === 'tagliati' ? '(Tag.)' : tipo === 'saldati' ? '(Sal.)' : tipo === 'piegati' || tipo === 'piegate' ? '(Gre.)' : '(Ver.)'}
                         </div>
                         {!hasStock && isSelected && (
                           <div className="text-[9px] text-red-500 font-medium">Stock insufficiente!</div>

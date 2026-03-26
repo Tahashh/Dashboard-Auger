@@ -1,0 +1,56 @@
+-- Schema Database Industrial ERP Lite
+
+CREATE TABLE IF NOT EXISTS articles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL,
+  codice TEXT NOT NULL UNIQUE,
+  verniciati INTEGER DEFAULT 0,
+  impegni_clienti INTEGER DEFAULT 0,
+  piega INTEGER DEFAULT 0,
+  scorta INTEGER DEFAULT 10,
+  prezzo REAL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS processes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  articolo_id INTEGER NOT NULL,
+  taglio INTEGER DEFAULT 0,
+  piega INTEGER DEFAULT 0,
+  verniciatura INTEGER DEFAULT 0,
+  FOREIGN KEY (articolo_id) REFERENCES articles (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL UNIQUE,
+  email TEXT,
+  telefono TEXT,
+  data_inserimento DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS commitments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  articolo_id INTEGER NOT NULL,
+  cliente TEXT NOT NULL,
+  commessa TEXT NOT NULL,
+  quantita INTEGER DEFAULT 0,
+  priorita INTEGER DEFAULT 0,
+  fase_produzione TEXT DEFAULT 'Generico',
+  operatore TEXT,
+  note TEXT,
+  stato_lavorazione TEXT DEFAULT 'Pianificato',
+  data_inserimento DATETIME DEFAULT CURRENT_TIMESTAMP,
+  timestamp_modifica DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(articolo_id) REFERENCES articles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS movements_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  articolo_id INTEGER NOT NULL,
+  fase TEXT NOT NULL,
+  tipo TEXT NOT NULL,
+  quantita INTEGER NOT NULL,
+  operatore TEXT,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(articolo_id) REFERENCES articles(id) ON DELETE CASCADE
+);

@@ -12,12 +12,122 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "When the user profile was created" }
       },
       "required": ["uid", "email"]
+    },
+    "articles": {
+      "title": "Article",
+      "description": "An article in the inventory",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier (UUID)" },
+        "nome": { "type": "string", "description": "Article name" },
+        "codice": { "type": "string", "description": "Article code" },
+        "verniciati": { "type": "number", "description": "Number of painted pieces" },
+        "impegni_clienti": { "type": "number", "description": "Number of pieces committed to clients" },
+        "piega": { "type": "number", "description": "Pieces in folding phase" },
+        "scorta": { "type": "number", "description": "Minimum stock level" },
+        "prezzo": { "type": "number", "description": "Price" },
+        "famiglia": { "type": "string", "description": "Article family category" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "nome", "codice", "verniciati", "impegni_clienti", "piega", "scorta", "createdAt", "updatedAt"]
+    },
+    "processes": {
+      "title": "Process",
+      "description": "Manufacturing process counts for an article",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier (UUID)" },
+        "articolo_id": { "type": "string", "description": "Reference to the article ID" },
+        "taglio": { "type": "number", "description": "Pieces in cutting phase" },
+        "piega": { "type": "number", "description": "Pieces in folding phase" },
+        "saldatura": { "type": "number", "description": "Pieces in welding phase" },
+        "verniciatura": { "type": "number", "description": "Pieces in painting phase" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "articolo_id", "taglio", "piega", "saldatura", "verniciatura", "createdAt", "updatedAt"]
+    },
+    "clients": {
+      "title": "Client",
+      "description": "A client of the company",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier (UUID)" },
+        "nome": { "type": "string", "description": "Client name" },
+        "email": { "type": "string", "format": "email", "description": "Client email" },
+        "telefono": { "type": "string", "description": "Client phone number" },
+        "data_inserimento": { "type": "string", "format": "date-time", "description": "Creation date" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "nome", "data_inserimento", "createdAt", "updatedAt"]
+    },
+    "commitments": {
+      "title": "Commitment",
+      "description": "A client commitment/order for an article",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier (UUID)" },
+        "articolo_id": { "type": "string", "description": "Reference to the article ID" },
+        "cliente": { "type": "string", "description": "Client name or reference" },
+        "commessa": { "type": "string", "description": "Order reference" },
+        "quantita": { "type": "number", "description": "Quantity committed" },
+        "priorita": { "type": "number", "description": "Priority level" },
+        "fase_produzione": { "type": "string", "description": "Current production phase" },
+        "operatore": { "type": "string", "description": "Operator assigned" },
+        "note": { "type": "string", "description": "Additional notes" },
+        "stato_lavorazione": { "type": "string", "description": "Status of the work" },
+        "data_inserimento": { "type": "string", "format": "date-time", "description": "Creation date" },
+        "timestamp_modifica": { "type": "string", "format": "date-time", "description": "Last modification date" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "articolo_id", "cliente", "commessa", "quantita", "priorita", "data_inserimento", "createdAt", "updatedAt"]
+    },
+    "movements_log": {
+      "title": "Movement Log",
+      "description": "A log of inventory movements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier (UUID)" },
+        "articolo_id": { "type": "string", "description": "Reference to the article ID" },
+        "fase": { "type": "string", "description": "Phase where the movement occurred" },
+        "tipo": { "type": "string", "description": "Type of movement (e.g., in, out)" },
+        "quantita": { "type": "number", "description": "Quantity moved" },
+        "operatore": { "type": "string", "description": "Operator who made the movement" },
+        "cliente": { "type": "string", "description": "Client associated with the movement" },
+        "commessa": { "type": "string", "description": "Order associated with the movement" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the movement occurred" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "articolo_id", "fase", "tipo", "quantita", "timestamp", "createdAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "users",
       "description": "User profile documents"
+    },
+    "/articles/{articleId}": {
+      "schema": "articles",
+      "description": "Inventory articles"
+    },
+    "/processes/{processId}": {
+      "schema": "processes",
+      "description": "Manufacturing processes for articles"
+    },
+    "/clients/{clientId}": {
+      "schema": "clients",
+      "description": "Company clients"
+    },
+    "/commitments/{commitmentId}": {
+      "schema": "commitments",
+      "description": "Client commitments/orders"
+    },
+    "/movements_log/{movementId}": {
+      "schema": "movements_log",
+      "description": "Log of all inventory movements"
     }
   }
 }

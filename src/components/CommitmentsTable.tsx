@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Article, Commitment, AUTHORIZED_USERS } from '../types';
 import { Edit2, Check, X, Info } from 'lucide-react';
+import { fetchCommitments, updateArticle } from '../api';
+import { toast } from 'react-hot-toast';
 
 interface CommitmentsTableProps {
   articles: Article[];
@@ -9,16 +11,15 @@ interface CommitmentsTableProps {
 }
 
 export default function CommitmentsTable({ articles, onUpdate, username }: CommitmentsTableProps) {
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [impegni, setImpegni] = useState<number>(0);
   const [commitments, setCommitments] = useState<Commitment[]>([]);
 
   const isAuthorized = AUTHORIZED_USERS.includes(username);
 
-  const fetchCommitments = async () => {
+  const loadCommitments = async () => {
     try {
-      const res = await fetch('/api/commitments');
-      const data = await res.json();
+      const data = await fetchCommitments();
       setCommitments(data);
     } catch (error) {
       console.error("Error fetching commitments:", error);
@@ -26,26 +27,22 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
   };
 
   useEffect(() => {
-    fetchCommitments();
-    const interval = setInterval(fetchCommitments, 5000);
+    loadCommitments();
+    const interval = setInterval(loadCommitments, 5000);
     return () => clearInterval(interval);
   }, []);
 
   const handleUpdate = async (article: Article) => {
     if (!isAuthorized) return;
     try {
-      await fetch(`/api/articles/${article.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...article,
-          impegni_clienti: impegni
-        })
+      await updateArticle(article.id, {
+        impegni_clienti: impegni
       });
       setEditingId(null);
       onUpdate();
-    } catch (error) {
-      console.error("Error updating commitment:", error);
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || "Errore durante l'aggiornamento dell'impegno");
     }
   };
 
@@ -58,20 +55,36 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
   // Sort articles by commitments (descending) to show most engaged items first
   const sortedArticles = [...articles].sort((a, b) => b.impegni_clienti - a.impegni_clienti);
 
-  const getArticleCommitments = (articleId: number) => {
-    return commitments.filter(c => c.articolo_id === articleId);
+  const getArticleCommitments = (articleId: string) => {
+    return commitments.filter(c => c.articolo_id === articleId && c.stato_lavorazione !== 'Completato');
+  };
+
+  const getPrioritaLabel = (p: number) => {
+    if (p === 0) return "Nessuna";
+    if (p <= 3) return "Bassa";
+    if (p <= 6) return "Media";
+    if (p <= 9) return "Alta";
+    return "Urgente";
+  };
+
+  const getPrioritaColor = (p: number) => {
+    if (p === 0) return "text-slate-400";
+    if (p <= 3) return "text-blue-400";
+    if (p <= 6) return "text-amber-400";
+    if (p <= 9) return "text-orange-400";
+    return "text-red-400 font-bold";
   };
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+      <div className="p-5 border-b border-slate-200/80 bg-white/50 backdrop-blur-sm flex items-center justify-between rounded-t-xl">
         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
           Impegni Clienti
         </h2>
       </div>
 
-      <div className="flex-1 overflow-auto">
-        <table className="w-full text-sm text-left">
+      <div className="flex-1 overflow-auto custom-scrollbar">
+        <table className="w-full text-sm text-left min-w-[400px]">
           <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
             <tr>
               <th className="px-4 py-3 font-semibold">Articolo</th>
@@ -88,7 +101,7 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
               if (isEditing) {
                 return (
                   <tr key={article.id} className="bg-blue-50/50">
-                    <td className="px-4 py-2 font-medium text-slate-900 truncate max-w-[120px]" title={article.nome}>
+                    <td className="px-4 py-2 font-medium text-slate-900" title={article.nome}>
                       {article.nome}
                     </td>
                     <td className="px-4 py-2">
@@ -112,9 +125,9 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
 
               return (
                 <tr key={article.id} className="hover:bg-slate-50 transition-colors group relative">
-                  <td className="px-4 py-3 font-medium text-slate-900 truncate max-w-[120px] group/tooltip cursor-help">
+                  <td className="px-4 py-3 font-medium text-slate-900 group/tooltip cursor-help">
                     <div className="flex items-center gap-1">
-                      <span className="truncate">{article.nome}</span>
+                      <span>{article.nome}</span>
                       {hasCommitments && <Info className="h-3 w-3 text-slate-400" />}
                     </div>
                     
@@ -124,11 +137,19 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
                         <div className="font-bold mb-2 border-b border-slate-600 pb-1">Dettaglio Impegni</div>
                         <ul className="space-y-2">
                           {articleCommitments.map(c => (
-                            <li key={c.id} className="flex justify-between items-start">
+                            <li key={`${c.id}-tooltip-1`} className="flex justify-between items-start">
                               <div>
                                 <div className="font-medium text-emerald-400">{c.cliente}</div>
                                 <div className="text-slate-400 font-mono text-[10px]">{c.commessa}</div>
-                                <div className="text-[10px] mt-0.5 text-slate-300">Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span></div>
+                                {c.note && <div className="text-[9px] text-emerald-300 italic">Note: {c.note}</div>}
+                                <div className="text-[10px] mt-0.5 text-slate-300">
+                                  Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span>
+                                  {c.priorita > 0 && (
+                                    <span className={`ml-2 px-1 rounded bg-slate-700 ${getPrioritaColor(c.priorita)}`}>
+                                      P: {getPrioritaLabel(c.priorita)}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
                             </li>
@@ -152,11 +173,19 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
                         <div className="font-bold mb-2 border-b border-slate-600 pb-1">Dettaglio Impegni</div>
                         <ul className="space-y-2">
                           {articleCommitments.map(c => (
-                            <li key={c.id} className="flex justify-between items-start">
+                            <li key={`${c.id}-tooltip-2`} className="flex justify-between items-start">
                               <div>
                                 <div className="font-medium text-emerald-400">{c.cliente}</div>
                                 <div className="text-slate-400 font-mono text-[10px]">{c.commessa}</div>
-                                <div className="text-[10px] mt-0.5 text-slate-300">Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span></div>
+                                {c.note && <div className="text-[9px] text-emerald-300 italic">Note: {c.note}</div>}
+                                <div className="text-[10px] mt-0.5 text-slate-300">
+                                  Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span>
+                                  {c.priorita > 0 && (
+                                    <span className={`ml-2 px-1 rounded bg-slate-700 ${getPrioritaColor(c.priorita)}`}>
+                                      P: {getPrioritaLabel(c.priorita)}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
                             </li>

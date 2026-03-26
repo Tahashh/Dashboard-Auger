@@ -1,0 +1,16 @@
+{
+"name": "Dashboard Auger",
+"short_name": "Auger",
+"start_url": "/",
+"display": "standalone",
+"background_color": "#ffffff",
+"theme_color": "#0f172a",
+"icons": [
+{
+"src": "https://i.postimg.cc/9f6C0D3q/Gemini-Generated-Image-p1iwzwp1iwzwp1iw.png",
+"sizes": "512x512",
+"type": "image/png",
+"purpose": "any maskable"
+}
+]
+}

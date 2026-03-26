@@ -14,6 +14,76 @@ service cloud.firestore {
     //   - role: string (optional, enum: ['admin', 'user']) - The user's role
     //   - createdAt: string (optional, ISO 8601) - When the user profile was created
     //
+    // Collection: articles
+    // Document ID: {articleId}
+    // Fields:
+    //   - id: string (required)
+    //   - nome: string (required)
+    //   - codice: string (required)
+    //   - verniciati: number (required)
+    //   - impegni_clienti: number (required)
+    //   - piega: number (required)
+    //   - scorta: number (required)
+    //   - prezzo: number (optional)
+    //   - famiglia: string (optional)
+    //   - createdAt: string (required)
+    //   - updatedAt: string (required)
+    //
+    // Collection: processes
+    // Document ID: {processId}
+    // Fields:
+    //   - id: string (required)
+    //   - articolo_id: string (required)
+    //   - taglio: number (required)
+    //   - piega: number (required)
+    //   - saldatura: number (required)
+    //   - verniciatura: number (required)
+    //   - createdAt: string (required)
+    //   - updatedAt: string (required)
+    //
+    // Collection: clients
+    // Document ID: {clientId}
+    // Fields:
+    //   - id: string (required)
+    //   - nome: string (required)
+    //   - email: string (optional)
+    //   - telefono: string (optional)
+    //   - data_inserimento: string (required)
+    //   - createdAt: string (required)
+    //   - updatedAt: string (required)
+    //
+    // Collection: commitments
+    // Document ID: {commitmentId}
+    // Fields:
+    //   - id: string (required)
+    //   - articolo_id: string (required)
+    //   - cliente: string (required)
+    //   - commessa: string (required)
+    //   - quantita: number (required)
+    //   - priorita: number (required)
+    //   - fase_produzione: string (optional)
+    //   - operatore: string (optional)
+    //   - note: string (optional)
+    //   - stato_lavorazione: string (optional)
+    //   - data_inserimento: string (required)
+    //   - timestamp_modifica: string (optional)
+    //   - createdAt: string (required)
+    //   - updatedAt: string (required)
+    //
+    // Collection: movements_log
+    // Document ID: {movementId}
+    // Fields:
+    //   - id: string (required)
+    //   - articolo_id: string (required)
+    //   - fase: string (required)
+    //   - tipo: string (required)
+    //   - quantita: number (required)
+    //   - operatore: string (optional)
+    //   - cliente: string (optional)
+    //   - commessa: string (optional)
+    //   - timestamp: string (required)
+    //   - createdAt: string (required)
+    //
     // ===============================================================
 
     // ===============================================================
@@ -29,12 +99,24 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-          (request.auth.token.email == "tahajb232@gmail.com" && request.auth.token.email_verified == true));
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          (request.auth.token.email in [
+            "tahajb232@gmail.com",
+            "lucaturati@gmail.com",
+            "adeleturati@gmail.com",
+            "robertobonalumi@gmail.com",
+            "samantalimonta@gmail.com",
+            "tahajbala@gmail.com"
+          ] && request.auth.token.email_verified == true));
     }
 
     function isValidEmail(email) {
       return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
     }
 
     function isValidUser(data) {
@@ -46,6 +128,76 @@ service cloud.firestore {
              (!('createdAt' in data) || (data.createdAt is string));
     }
 
+    function isValidArticle(data) {
+      return data.keys().hasAll(['id', 'nome', 'codice', 'verniciati', 'impegni_clienti', 'piega', 'scorta', 'createdAt', 'updatedAt']) &&
+             data.id is string &&
+             data.nome is string && data.nome.size() > 0 && data.nome.size() < 200 &&
+             data.codice is string && data.codice.size() > 0 && data.codice.size() < 100 &&
+             data.verniciati is number &&
+             data.impegni_clienti is number &&
+             data.piega is number &&
+             data.scorta is number &&
+             (!('prezzo' in data) || data.prezzo is number) &&
+             (!('famiglia' in data) || (data.famiglia is string && data.famiglia.size() < 100)) &&
+             isValidDateString(data.createdAt) &&
+             isValidDateString(data.updatedAt);
+    }
+
+    function isValidProcess(data) {
+      return data.keys().hasAll(['id', 'articolo_id', 'taglio', 'piega', 'saldatura', 'verniciatura', 'createdAt', 'updatedAt']) &&
+             data.id is string &&
+             data.articolo_id is string &&
+             data.taglio is number &&
+             data.piega is number &&
+             data.saldatura is number &&
+             data.verniciatura is number &&
+             isValidDateString(data.createdAt) &&
+             isValidDateString(data.updatedAt);
+    }
+
+    function isValidClient(data) {
+      return data.keys().hasAll(['id', 'nome', 'data_inserimento', 'createdAt', 'updatedAt']) &&
+             data.id is string &&
+             data.nome is string && data.nome.size() > 0 && data.nome.size() < 200 &&
+             (!('email' in data) || (data.email is string && isValidEmail(data.email))) &&
+             (!('telefono' in data) || (data.telefono is string && data.telefono.size() < 50)) &&
+             isValidDateString(data.data_inserimento) &&
+             isValidDateString(data.createdAt) &&
+             isValidDateString(data.updatedAt);
+    }
+
+    function isValidCommitment(data) {
+      return data.keys().hasAll(['id', 'articolo_id', 'cliente', 'commessa', 'quantita', 'priorita', 'data_inserimento', 'createdAt', 'updatedAt']) &&
+             data.id is string &&
+             data.articolo_id is string &&
+             data.cliente is string && data.cliente.size() > 0 && data.cliente.size() < 200 &&
+             data.commessa is string && data.commessa.size() > 0 && data.commessa.size() < 100 &&
+             data.quantita is number &&
+             data.priorita is number &&
+             (!('fase_produzione' in data) || (data.fase_produzione is string && data.fase_produzione.size() < 100)) &&
+             (!('operatore' in data) || (data.operatore is string && data.operatore.size() < 100)) &&
+             (!('note' in data) || (data.note is string && data.note.size() < 1000)) &&
+             (!('stato_lavorazione' in data) || (data.stato_lavorazione is string && data.stato_lavorazione.size() < 100)) &&
+             isValidDateString(data.data_inserimento) &&
+             (!('timestamp_modifica' in data) || isValidDateString(data.timestamp_modifica)) &&
+             isValidDateString(data.createdAt) &&
+             isValidDateString(data.updatedAt);
+    }
+
+    function isValidMovementLog(data) {
+      return data.keys().hasAll(['id', 'articolo_id', 'fase', 'tipo', 'quantita', 'timestamp', 'createdAt']) &&
+             data.id is string &&
+             data.articolo_id is string &&
+             data.fase is string && data.fase.size() > 0 && data.fase.size() < 100 &&
+             data.tipo is string && data.tipo.size() > 0 && data.tipo.size() < 50 &&
+             data.quantita is number &&
+             (!('operatore' in data) || (data.operatore is string && data.operatore.size() < 100)) &&
+             (!('cliente' in data) || (data.cliente is string && data.cliente.size() < 200)) &&
+             (!('commessa' in data) || (data.commessa is string && data.commessa.size() < 100)) &&
+             isValidDateString(data.timestamp) &&
+             isValidDateString(data.createdAt);
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -55,6 +207,51 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == 'user' || isAdmin());
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
       allow delete: if isAdmin();
+    }
+
+    match /authorized_users/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /articles/{articleId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidArticle(request.resource.data);
+      allow update: if isAuthenticated() && isValidArticle(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAuthenticated();
+    }
+
+    match /processes/{processId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidProcess(request.resource.data);
+      allow update: if isAuthenticated() && isValidProcess(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAuthenticated();
+    }
+
+    match /clients/{clientId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidClient(request.resource.data);
+      allow update: if isAuthenticated() && isValidClient(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAuthenticated();
+    }
+
+    match /commitments/{commitmentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidCommitment(request.resource.data);
+      allow update: if isAuthenticated() && isValidCommitment(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAuthenticated();
+    }
+
+    match /movements_log/{movementId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidMovementLog(request.resource.data);
+      allow update: if isAuthenticated() && isValidMovementLog(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAuthenticated();
+    }
+
+    match /presence/{username} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
   }
 }
