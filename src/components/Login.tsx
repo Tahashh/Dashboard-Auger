@@ -4,7 +4,7 @@ import { Eye, EyeOff, Lock, User, ArrowRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface LoginProps {
-  onLogin: (username: string) => void;
+  onLogin: (username: string, role: string) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
@@ -42,7 +42,7 @@ export default function Login({ onLogin }: LoginProps) {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        onLogin(data.username);
+        onLogin(data.username, data.role);
       } else {
         toast.error(data.error || 'Errore durante il login');
       }
@@ -92,9 +92,10 @@ export default function Login({ onLogin }: LoginProps) {
           {/* Sostituisci il src con l'URL del tuo logo se lo carichi nei public assets */}
           <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center shadow-2xl shadow-black/50 overflow-hidden border-4 border-white/10">
             <img 
-              src="https://files.fm/u/jp2cpz79h2" // Usa il link fornito o sostituisci con il percorso locale es. "/logo.png"
+              src="https://storage.googleapis.com/aistudio-user-content/2026-03-27/05-02-46-questa-image.png"
               alt="Auger Logo" 
               className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
               onError={(e) => {
                 // Fallback se l'immagine non carica
                 (e.target as HTMLImageElement).style.display = 'none';
@@ -109,7 +110,7 @@ export default function Login({ onLogin }: LoginProps) {
             transition={{ delay: 0.5, duration: 0.5 }}
             className="text-white text-2xl font-light tracking-widest mt-6 text-center"
           >
-            SISTEMA GESTIONALE
+            DASHBOARD AUGER
           </motion.h1>
         </motion.div>
 

@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileSpreadsheet, FileText, AlertCircle, CheckCircle, XCircle, Loader2, Users, X, ArrowRight, Link } from 'lucide-react';
+import { Upload, FileSpreadsheet, FileText, AlertCircle, CheckCircle, XCircle, Loader2, Users, X, ArrowRight, Link, Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { toast } from 'react-hot-toast';
 import { fetchArticles, fetchClients, fetchProcesses, fetchCommitments, addArticle, addProcess, addClient } from '../api';
@@ -8,7 +8,7 @@ interface ImportDataViewProps {
   onImportComplete: () => void;
 }
 
-type ImportType = 'articoli' | 'clienti' | 'lavorazioni' | 'google-sheets';
+type ImportType = 'articoli' | 'clienti' | 'lavorazioni' | 'google-sheets' | 'movimenti';
 
 interface MappedData {
   [key: string]: any;
@@ -29,7 +29,46 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
   const [summary, setSummary] = useState({ success: 0, errors: 0, duplicates: 0 });
   const [lastError, setLastError] = useState<string | null>(null);
   
+  const [globalCliente, setGlobalCliente] = useState<string>('');
+  const [globalCommessa, setGlobalCommessa] = useState<string>('');
+  const [clients, setClients] = useState<any[]>([]);
+
+  React.useEffect(() => {
+    fetchClients().then(setClients).catch(console.error);
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const exportMovementsToExcel = async () => {
+    try {
+      const response = await fetch('/api/movements');
+      if (!response.ok) throw new Error('Errore nel caricamento dei movimenti');
+      const movements = await response.json();
+      
+      const data = movements.map((m: any) => ({
+        'ID Articolo': m.articolo_id,
+        'Nome Articolo': m.articolo_nome || '',
+        'Codice Articolo': m.articolo_codice || '',
+        'Fase': m.fase,
+        'Tipo': m.tipo,
+        'Quantità': m.quantita,
+        'Operatore': m.operatore || '',
+        'Cliente': m.cliente || '',
+        'Commessa': m.commessa || '',
+        'Data': m.timestamp
+      }));
+      
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Movimenti");
+      
+      XLSX.writeFile(workbook, `movimenti_auger_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast.success("Esportazione movimenti completata");
+    } catch (error: any) {
+      console.error(error);
+      toast.error("Errore durante l'esportazione dei movimenti");
+    }
+  };
 
   const exportArticlesToExcel = async () => {
     try {
@@ -210,6 +249,8 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
         { key: 'codice', label: 'Codice Articolo', required: false },
         { key: 'verniciati', label: 'Pezzi Verniciati', required: false },
         { key: 'impegni_clienti', label: 'Impegni Clienti', required: false },
+        { key: 'cliente', label: 'Cliente (per impegni)', required: false },
+        { key: 'commessa', label: 'Commessa (per impegni)', required: false },
         { key: 'piega', label: 'Pezzi in Piega', required: false },
         { key: 'prezzo', label: 'Prezzo (€)', required: false },
         { key: 'note', label: 'Note / Impegni', required: false }
@@ -220,6 +261,19 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
         { key: 'email', label: 'Email', required: false },
         { key: 'telefono', label: 'Telefono', required: false }
       ]
+    : importType === 'movimenti'
+    ? [
+        { key: 'articolo_id', label: 'ID Articolo', required: false },
+        { key: 'nome_articolo', label: 'Nome Articolo', required: false },
+        { key: 'codice_articolo', label: 'Codice Articolo', required: false },
+        { key: 'fase', label: 'Fase', required: true },
+        { key: 'tipo', label: 'Tipo', required: true },
+        { key: 'quantita', label: 'Quantità', required: true },
+        { key: 'operatore', label: 'Operatore', required: false },
+        { key: 'cliente', label: 'Cliente', required: false },
+        { key: 'commessa', label: 'Commessa', required: false },
+        { key: 'timestamp', label: 'Data', required: false }
+      ]
     : [
         { key: 'nome', label: 'Nome Articolo', required: true },
         { key: 'taglio', label: 'Taglio', required: false },
@@ -228,6 +282,8 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
         { key: 'verniciatura', label: 'Verniciatura', required: false },
         { key: 'scorta', label: 'Scorta Minima', required: false },
         { key: 'impegni_clienti', label: 'Impegni Clienti', required: false },
+        { key: 'cliente', label: 'Cliente (per impegni)', required: false },
+        { key: 'commessa', label: 'Commessa (per impegni)', required: false },
         { key: 'note', label: 'Note / Impegni (es: Cliente 50pz)', required: false }
       ];
 
@@ -296,7 +352,14 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
 
       currentFields.forEach(field => {
         const headerIdx = headers.indexOf(mapping[field.key]);
-        const value = headerIdx !== -1 ? row[headerIdx] : undefined;
+        let value = headerIdx !== -1 ? row[headerIdx] : undefined;
+        
+        if (field.key === 'cliente' && (!value || value === '') && globalCliente) {
+          value = globalCliente;
+        }
+        if (field.key === 'commessa' && (!value || value === '') && globalCommessa) {
+          value = globalCommessa;
+        }
         
         if (field.required && (value === undefined || value === '')) {
           hasError = true;
@@ -344,6 +407,8 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
             codice: row.codice,
             verniciatura: row.verniciati,
             impegni_clienti: row.impegni_clienti,
+            cliente: row.cliente,
+            commessa: row.commessa,
             piega: row.piega,
             prezzo: row.prezzo,
             note: row.note
@@ -355,6 +420,8 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
             verniciatura: row.verniciatura,
             scorta: row.scorta,
             impegni_clienti: row.impegni_clienti,
+            cliente: row.cliente,
+            commessa: row.commessa,
             note: row.note
           };
 
@@ -385,6 +452,20 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
             });
             successCount++;
           }
+        } else if (importType === 'movimenti') {
+          const response = await fetch('/api/movements/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify([row])
+          });
+          if (response.ok) {
+            successCount++;
+          } else {
+            const errorText = await response.text();
+            console.error('Movement import error:', errorText);
+            errorCount++;
+            setLastError(errorText);
+          }
         }
       } catch (err: any) {
         console.error('Import row error:', err);
@@ -407,6 +488,8 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
     setPreviewData([]);
     setStep(1);
     setProgress(0);
+    setGlobalCliente('');
+    setGlobalCommessa('');
   };
 
   return (
@@ -435,6 +518,13 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
           >
             <Download className="h-4 w-4" />
             Esporta Clienti
+          </button>
+          <button 
+            onClick={exportMovementsToExcel}
+            className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white px-4 py-2 rounded-xl font-medium hover:from-emerald-600 hover:to-teal-700 transition-all shadow-sm hover:shadow-md text-sm border border-transparent"
+          >
+            <Download className="h-4 w-4" />
+            Esporta Movimenti
           </button>
           {step > 1 && step < 4 && (
             <button onClick={reset} className="text-sm text-slate-500 hover:text-slate-800 font-medium transition-colors px-3 py-2 rounded-lg hover:bg-slate-100">
@@ -494,6 +584,15 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
                 <Link className="w-6 h-6" />
               </div>
               <span className="font-semibold">Sync Google Sheets</span>
+            </button>
+            <button
+              onClick={() => setImportType('movimenti')}
+              className={`p-6 rounded-2xl border-2 transition-all duration-300 flex flex-col items-center justify-center gap-3 ${importType === 'movimenti' ? 'border-indigo-500 bg-indigo-50/50 text-indigo-700 shadow-sm' : 'border-slate-200/60 hover:border-indigo-300 hover:bg-slate-50 text-slate-600'}`}
+            >
+              <div className={`p-3 rounded-xl ${importType === 'movimenti' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}>
+                <FileText className="w-6 h-6" />
+              </div>
+              <span className="font-semibold">Importa Movimenti</span>
             </button>
           </div>
 
@@ -606,6 +705,43 @@ export default function ImportDataView({ onImportComplete }: ImportDataViewProps
                 </div>
               ))}
             </div>
+
+            {(importType === 'articoli' || importType === 'movimenti' || importType === 'lavorazioni') && (
+              <div className="mt-8 pt-6 border-t border-slate-200/60">
+                <h4 className="text-lg font-semibold text-slate-800 mb-4">Impostazioni Globali (Opzionali)</h4>
+                <p className="text-sm text-slate-500 mb-4">
+                  Se il tuo file non contiene le colonne Cliente e Commessa, puoi impostare un valore predefinito per tutte le righe importate.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="flex flex-col gap-2">
+                    <label className="text-sm font-semibold text-slate-700">Cliente Predefinito</label>
+                    <input 
+                      type="text" 
+                      list="clients-list"
+                      className="border border-slate-200/60 rounded-xl p-3 text-sm bg-white shadow-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                      placeholder="Es. Mario Rossi"
+                      value={globalCliente}
+                      onChange={(e) => setGlobalCliente(e.target.value)}
+                    />
+                    <datalist id="clients-list">
+                      {clients.map(c => (
+                        <option key={c.id} value={c.nome} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-sm font-semibold text-slate-700">Commessa Predefinita</label>
+                    <input 
+                      type="text" 
+                      className="border border-slate-200/60 rounded-xl p-3 text-sm bg-white shadow-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                      placeholder="Es. C-2023-001"
+                      value={globalCommessa}
+                      onChange={(e) => setGlobalCommessa(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex justify-end">
             <button 

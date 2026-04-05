@@ -1,27 +1,62 @@
-import { Article, Process, Commitment, Client, MovementLog, User, ChatMessage } from './types';
+import { Article, Process, Commitment, Client, MovementLog, User, ChatMessage, Macchina5000, FaseTaglio, TaglioLaser, PiastraAT, PortaAT, InvolucroAT } from './types';
 
-// Helper for API calls
-async function apiCall<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  });
-  
-  if (!response.ok) {
-    let errorMessage = 'API Error';
-    try {
-      const errorData = await response.json();
-      errorMessage = errorData.error || errorMessage;
-    } catch (e) {
-      errorMessage = await response.text() || errorMessage;
+// Helper for API calls with exponential backoff retry
+export async function apiCall<T>(url: string, options?: RequestInit, retries = 3, backoff = 300): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (response.status === 429 && retries > 0) {
+      console.warn(`Rate limit exceeded for ${url}. Retrying in ${backoff}ms...`);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+      return apiCall<T>(url, options, retries - 1, backoff * 2);
     }
-    throw new Error(errorMessage);
+
+    const contentType = response.headers.get('content-type');
+    if (contentType && !contentType.includes('application/json')) {
+      if (!response.ok) {
+        throw new Error(`Errore API: ${response.status} ${response.statusText}`);
+      }
+      // If it's not JSON but response is OK, it might be an HTML error page from Vite
+      throw new Error(`Risposta non valida dal server (non JSON)`);
+    }
+
+    const text = await response.text();
+    let data: any;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (e) {
+      data = text;
+    }
+
+    if (!response.ok) {
+      const errorMessage = (data && typeof data === 'object' && data.error) 
+        ? data.error 
+        : (typeof data === 'string' && data.length > 0 ? data : `Errore API: ${response.status} ${response.statusText}`);
+      throw new Error(errorMessage);
+    }
+    
+    // If data is null but we expect something, return empty object/array if possible
+    // but usually the backend should return [] or {}
+    return data as T;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('La richiesta ha impiegato troppo tempo. Riprova.');
+    }
+    throw error;
   }
-  
-  return response.json();
 }
 
 // Articles
@@ -91,6 +126,27 @@ export const deleteCommitment = async (id: string) => {
   });
 };
 
+export const reorderCommitments = async (orders: { id: string, priority: number }[]) => {
+  return apiCall('/api/commitments/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ orders }),
+  });
+};
+
+export const fulfillCommitment = async (id: string, username: string) => {
+  return apiCall(`/api/commitments/${id}/fulfill`, {
+    method: 'POST',
+    body: JSON.stringify({ username }),
+  });
+};
+
+export const fulfillByCommessa = async (commessa: string, ids: string[] | undefined, username: string) => {
+  return apiCall<any>('/api/commitments/fulfill-by-commessa', {
+    method: 'POST',
+    body: JSON.stringify({ commessa, ids, username }),
+  });
+};
+
 export const shipCommitment = async (id: string, username: string) => {
   return apiCall(`/api/commitments/${id}/ship`, {
     method: 'POST',
@@ -154,6 +210,146 @@ export const sendChatMessage = async (sender: string, text: string): Promise<Cha
   return apiCall<ChatMessage>('/api/chat/messages', {
     method: 'POST',
     body: JSON.stringify({ sender, text }),
+  });
+};
+
+// Casse AT
+export const fetchCasseComplete = async (): Promise<any[]> => {
+  return apiCall<any[]>('/api/casse-at/complete');
+};
+
+export const updateCassaCompleta = async (id: string, data: any) => {
+  return apiCall(`/api/casse-at/complete/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+// Macchina 5000
+export const fetchMacchina5000 = async (): Promise<Macchina5000[]> => {
+  return apiCall<Macchina5000[]>('/api/macchina-5000');
+};
+
+export const addMacchina5000 = async (data: Omit<Macchina5000, 'id'>) => {
+  return apiCall('/api/macchina-5000', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
+export const updateMacchina5000 = async (id: string, data: Partial<Macchina5000>) => {
+  return apiCall(`/api/macchina-5000/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+export const deleteMacchina5000 = async (id: string) => {
+  return apiCall(`/api/macchina-5000/${id}`, {
+    method: 'DELETE',
+  });
+};
+
+// Taglio Laser
+export const fetchTaglioLaser = async (): Promise<TaglioLaser[]> => {
+  return apiCall<TaglioLaser[]>('/api/taglio-laser');
+};
+
+export const addTaglioLaser = async (data: Omit<TaglioLaser, 'id'>) => {
+  return apiCall('/api/taglio-laser', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
+export const updateTaglioLaser = async (id: string, data: Partial<TaglioLaser>) => {
+  return apiCall(`/api/taglio-laser/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+export const deleteTaglioLaser = async (id: string) => {
+  return apiCall(`/api/taglio-laser/${id}`, {
+    method: 'DELETE',
+  });
+};
+
+// Movimenti C. Gialla
+export const fetchMovimentiCGialla = async (): Promise<any[]> => {
+  return apiCall<any[]>('/api/movimenti-c-gialla');
+};
+
+export const addMovimentoCGialla = async (data: any) => {
+  return apiCall('/api/movimenti-c-gialla', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
+// Fase Taglio
+export const fetchFaseTaglio = async (): Promise<FaseTaglio[]> => {
+  return apiCall<FaseTaglio[]>('/api/fase-taglio');
+};
+
+export const addFaseTaglio = async (data: Omit<FaseTaglio, 'id'>) => {
+  return apiCall('/api/fase-taglio', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
+export const addFaseSaldatura = async (data: Omit<FaseTaglio, 'id'>) => {
+  return apiCall('/api/fase-saldatura', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
+export const updateFaseTaglio = async (id: string, data: Partial<FaseTaglio>) => {
+  return apiCall(`/api/fase-taglio/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+export const deleteFaseTaglio = async (id: string) => {
+  return apiCall(`/api/fase-taglio/${id}`, {
+    method: 'DELETE',
+  });
+};
+
+// Casse AT
+export const fetchPiastreAT = async (): Promise<PiastraAT[]> => {
+  return apiCall<PiastraAT[]>('/api/casse-at/piastre');
+};
+
+export const updatePiastraAT = async (id: number, data: Partial<PiastraAT>) => {
+  return apiCall(`/api/casse-at/piastre/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+export const fetchPorteAT = async (): Promise<PortaAT[]> => {
+  return apiCall<PortaAT[]>('/api/casse-at/porte');
+};
+
+export const updatePortaAT = async (id: number, data: Partial<PortaAT>) => {
+  return apiCall(`/api/casse-at/porte/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+export const fetchInvolucroAT = async (): Promise<InvolucroAT[]> => {
+  return apiCall<InvolucroAT[]>('/api/casse-at/involucro');
+};
+
+export const updateInvolucroAT = async (id: number, data: Partial<InvolucroAT>) => {
+  return apiCall(`/api/casse-at/involucro/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
   });
 };
 

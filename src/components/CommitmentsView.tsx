@@ -1,194 +1,81 @@
-import { useState, useEffect } from 'react';
-import { Commitment, AUTHORIZED_USERS } from '../types';
-import { CheckCircle2, Package, ListOrdered, Truck } from 'lucide-react';
+import { useState } from 'react';
+import { Commitment, Article, AUTHORIZED_USERS } from '../types';
+import { CheckCircle2, Package, ListOrdered, Truck, Edit2, X, Check } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import CommitmentPriorityManager from './CommitmentPriorityManager';
-import ConfirmModal from './ConfirmModal';
-import { fetchCommitments, fetchArticles, fetchProcesses, updateArticle, updateProcess, updateCommitment, addMovementLog, shipCommitment } from '../api';
+import { updateArticle, updateProcess, updateCommitment, addMovementLog, shipCommitment, fulfillCommitment } from '../api';
 
 interface CommitmentsViewProps {
   onUpdate: () => void;
   username: string;
+  articles: Article[];
+  commitments: Commitment[];
 }
 
-export default function CommitmentsView({ onUpdate, username }: CommitmentsViewProps) {
-  const [commitments, setCommitments] = useState<Commitment[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function CommitmentsView({ onUpdate, username, articles, commitments }: CommitmentsViewProps) {
   const [showPriorityManager, setShowPriorityManager] = useState(false);
-  const [confirmModal, setConfirmModal] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({
-    isOpen: false,
-    title: '',
-    message: '',
-    onConfirm: () => {}
-  });
   
-  const isAuthorized = AUTHORIZED_USERS.includes(username);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    cliente: string;
+    commessa: string;
+    quantita: number;
+    articolo_id: string;
+    note: string;
+  }>({ cliente: '', commessa: '', quantita: 0, articolo_id: '', note: '' });
 
-  const loadCommitments = async () => {
+  const isAuthorized = AUTHORIZED_USERS.includes(username);
+  const canEdit = ['lucaturati', 'adeleturati', 'robertobonalumi'].includes(username.toLowerCase());
+
+  const startEdit = (c: Commitment) => {
+    if (!canEdit) return;
+    setEditingId(c.id);
+    setEditForm({
+      cliente: c.cliente,
+      commessa: c.commessa,
+      quantita: c.quantita,
+      articolo_id: c.articolo_id,
+      note: c.note || ''
+    });
+  };
+
+  const saveEdit = async (id: string) => {
+    if (!canEdit) return;
     try {
-      const data = await fetchCommitments();
-      setCommitments(data);
-    } catch (error) {
-      console.error("Error fetching commitments:", error);
-    } finally {
-      setLoading(false);
+      const qty = parseInt(editForm.quantita.toString(), 10);
+      if (isNaN(qty) || qty <= 0) {
+        toast.error("Quantità non valida");
+        return;
+      }
+      
+      await updateCommitment(id, {
+        cliente: editForm.cliente,
+        commessa: editForm.commessa,
+        quantita: qty,
+        articolo_id: editForm.articolo_id,
+        note: editForm.note,
+        operatore: username
+      });
+      
+      toast.success("Impegno aggiornato con successo");
+      setEditingId(null);
+      onUpdate();
+    } catch (error: any) {
+      toast.error(error.message || "Errore durante l'aggiornamento");
+      console.error("Error updating commitment:", error);
     }
   };
 
-  useEffect(() => {
-    loadCommitments();
-    const interval = setInterval(loadCommitments, 5000);
-    return () => clearInterval(interval);
-  }, []);
-
   const handleFulfill = async (id: string) => {
-    setConfirmModal({
-      isOpen: true,
-      title: 'Conferma Evasione',
-      message: 'Sei sicuro di voler evadere questo impegno? I pezzi verranno scalati dalla disponibilità.',
-      onConfirm: async () => {
-        try {
-          const commitment = commitments.find(c => c.id === id);
-          
-          if (!commitment) {
-            throw new Error("Impegno non trovato");
-          }
-          
-          if (commitment.stato_lavorazione === 'Completato') {
-            throw new Error("Impegno già evaso");
-          }
-
-          const qty = commitment.quantita;
-          const articolo_id = commitment.articolo_id;
-
-          const allArticles = await fetchArticles();
-          const article = allArticles.find(a => a.id === articolo_id);
-          
-          if (!article) {
-            throw new Error("Articolo non trovato");
-          }
-          
-          const isPiastra = article.nome.toLowerCase().includes('piastra');
-          
-          const allProcesses = await fetchProcesses();
-          const process = allProcesses.find(p => p.articolo_id === articolo_id);
-
-          const fase = commitment.fase_produzione?.toLowerCase() || 'generico';
-
-          if (fase === 'taglio') {
-            const taglioDisp = process ? (process.taglio || 0) : 0;
-            if (taglioDisp < qty) {
-              throw new Error(`Impossibile evadere: pezzi non sufficientemente tagliati (Disponibili: ${taglioDisp}, Richiesti: ${qty})`);
-            }
-            if (process) {
-              await updateProcess(process.id, {
-                taglio: Math.max(0, (process.taglio || 0) - qty)
-              });
-            }
-          } else if (fase === 'piega') {
-            const piegaDisp = process ? (process.piega || 0) : 0;
-            if (piegaDisp < qty) {
-              throw new Error(`Impossibile evadere: pezzi non sufficientemente piegati (Disponibili: ${piegaDisp}, Richiesti: ${qty})`);
-            }
-            await updateArticle(articolo_id, {
-              piega: Math.max(0, (article.piega || 0) - qty)
-            });
-            if (process) {
-              await updateProcess(process.id, {
-                piega: Math.max(0, (process.piega || 0) - qty)
-              });
-            }
-          } else if (fase === 'saldatura') {
-            const saldaturaDisp = process ? (process.saldatura || 0) : 0;
-            if (saldaturaDisp < qty) {
-              throw new Error(`Impossibile evadere: pezzi non sufficientemente saldati (Disponibili: ${saldaturaDisp}, Richiesti: ${qty})`);
-            }
-            if (process) {
-              await updateProcess(process.id, {
-                saldatura: Math.max(0, (process.saldatura || 0) - qty)
-              });
-            }
-          } else if (fase === 'verniciatura') {
-            const verniciatiDisp = article.verniciati || 0;
-            if (verniciatiDisp < qty) {
-              throw new Error(`Impossibile evadere: pezzi non sufficientemente verniciati (Disponibili: ${verniciatiDisp}, Richiesti: ${qty})`);
-            }
-            await updateArticle(articolo_id, {
-              verniciati: Math.max(0, (article.verniciati || 0) - qty)
-            });
-            if (process) {
-              await updateProcess(process.id, {
-                verniciatura: Math.max(0, (process.verniciatura || 0) - qty)
-              });
-            }
-          } else {
-            // Generico
-            const isPiastra = article.nome.toLowerCase().includes('piastra');
-            if (isPiastra) {
-              const piegaDisp = process ? (process.piega || 0) : 0;
-              if (piegaDisp < qty) {
-                throw new Error(`Impossibile evadere: le piastre non sono sufficientemente piegate (Disponibili: ${piegaDisp}, Richieste: ${qty})`);
-              }
-              
-              await updateArticle(articolo_id, {
-                piega: Math.max(0, (article.piega || 0) - qty)
-              });
-
-              if (process) {
-                await updateProcess(process.id, {
-                  piega: Math.max(0, (process.piega || 0) - qty)
-                });
-              }
-            } else {
-              const verniciatiDisp = article.verniciati || 0;
-              if (verniciatiDisp < qty) {
-                throw new Error(`Impossibile evadere: i pezzi non sono sufficientemente verniciati (Disponibili: ${verniciatiDisp}, Richiesti: ${qty})`);
-              }
-              
-              await updateArticle(articolo_id, {
-                verniciati: Math.max(0, (article.verniciati || 0) - qty)
-              });
-
-              if (process) {
-                await updateProcess(process.id, {
-                  verniciatura: Math.max(0, (process.verniciatura || 0) - qty)
-                });
-              }
-            }
-          }
-
-          // Update impegni_clienti
-          await updateArticle(articolo_id, {
-            impegni_clienti: Math.max(0, (article.impegni_clienti || 0) - qty)
-          });
-
-          await updateCommitment(id, {
-            stato_lavorazione: 'Completato',
-            timestamp_modifica: new Date().toISOString()
-          });
-          
-          await addMovementLog({
-            articolo_id: articolo_id,
-            articolo_nome: article.nome,
-            articolo_codice: article.codice,
-            fase: 'scarico commessa',
-            tipo: 'scarico',
-            quantita: qty,
-            operatore: username || 'System',
-            cliente: commitment.cliente,
-            commessa: commitment.commessa,
-            timestamp: new Date().toISOString()
-          });
-          
-          toast.success('Impegno evaso con successo!');
-          loadCommitments();
-          onUpdate();
-        } catch (error: any) {
-          toast.error(error.message, { duration: 5000 });
-          console.error("Error fulfilling commitment:", error);
-        }
-      }
-    });
+    try {
+      await fulfillCommitment(id, username);
+      toast.success('Impegno evaso con successo!');
+      onUpdate();
+    } catch (error: any) {
+      const message = error instanceof Error ? error.message : (typeof error === 'string' ? error : 'Errore sconosciuto');
+      toast.error(message, { duration: 5000 });
+      console.error("Error fulfilling commitment:", error);
+    }
   };
 
   const handleShip = async (id: string) => {
@@ -200,35 +87,51 @@ export default function CommitmentsView({ onUpdate, username }: CommitmentsViewP
       return;
     }
 
-    setConfirmModal({
-      isOpen: true,
-      title: 'Conferma Spedizione',
-      message: 'Sei sicuro di voler segnare questa commessa come spedita? Verrà rimossa dalla lista.',
-      onConfirm: async () => {
-        try {
-          await shipCommitment(id, username);
-          toast.success('Commessa spedita con successo!');
-          loadCommitments();
-          onUpdate();
-        } catch (error: any) {
-          toast.error(error.message, { duration: 5000 });
-          console.error("Error shipping commitment:", error);
-        }
-      }
-    });
+    try {
+      await shipCommitment(id, username);
+      toast.success('Commessa spedita con successo!');
+      onUpdate();
+    } catch (error: any) {
+      toast.error(error.message, { duration: 5000 });
+      console.error("Error shipping commitment:", error);
+    }
   };
 
-  const formatDate = (dateString: string) => {
-    // Append 'Z' to treat SQLite's UTC timestamp correctly
-    const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
-    return new Intl.DateTimeFormat('it-IT', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'Europe/Rome'
-    }).format(date);
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) return '-';
+    try {
+      // Append 'Z' to treat SQLite's UTC timestamp correctly
+      const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
+      if (isNaN(date.getTime())) return dateString;
+      return new Intl.DateTimeFormat('it-IT', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Europe/Rome'
+      }).format(date);
+    } catch (e) {
+      return dateString;
+    }
+  };
+
+  const mesi = ['GENNAIO', 'FEBBRAIO', 'MARZO', 'APRILE', 'MAGGIO', 'GIUGNO', 'LUGLIO', 'AGOSTO', 'SETTEMBRE', 'OTTOBRE', 'NOVEMBRE', 'DICEMBRE'];
+  const parseNote = (note?: string) => {
+    if (!note) return { month: 'ALTRO', additionalNote: '' };
+    const parts = note.split(' - ');
+    if (parts.length > 1) {
+      const firstPart = parts[0].toUpperCase();
+      if (mesi.includes(firstPart)) {
+        return { month: firstPart, additionalNote: parts.slice(1).join(' - ') };
+      }
+    } else {
+      const noteUpper = note.toUpperCase();
+      if (mesi.includes(noteUpper)) {
+        return { month: noteUpper, additionalNote: '' };
+      }
+    }
+    return { month: 'ALTRO', additionalNote: note };
   };
 
   return (
@@ -241,8 +144,10 @@ export default function CommitmentsView({ onUpdate, username }: CommitmentsViewP
           <h2 className="text-xl font-bold text-slate-800 tracking-tight">Elenco Impegni Attivi</h2>
         </div>
         <div className="flex items-center gap-4">
-          <div className="text-sm text-slate-500 font-medium bg-slate-100 px-3 py-1 rounded-full">
-            Totale: {commitments.length}
+          <div className="text-sm text-slate-500 font-medium bg-slate-100 px-3 py-1 rounded-full flex gap-3">
+            <span>Righe: {(commitments || []).length}</span>
+            <span className="w-px bg-slate-300"></span>
+            <span>Totale Pezzi: {(commitments || []).reduce((sum, c) => sum + (c.quantita || 0), 0)}</span>
           </div>
           {isAuthorized && (
             <button
@@ -263,20 +168,8 @@ export default function CommitmentsView({ onUpdate, username }: CommitmentsViewP
         />
       )}
 
-      <ConfirmModal
-        isOpen={confirmModal.isOpen}
-        title={confirmModal.title}
-        message={confirmModal.message}
-        onConfirm={confirmModal.onConfirm}
-        onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
-      />
-
       <div className="overflow-x-auto flex-1 custom-scrollbar">
-        {loading ? (
-          <div className="flex items-center justify-center h-32">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-slate-900"></div>
-          </div>
-        ) : commitments.length === 0 ? (
+        {(commitments || []).length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-slate-400">
             <Package className="h-12 w-12 mb-2 opacity-20" />
             <p>Nessun impegno attivo.</p>
@@ -295,89 +188,207 @@ export default function CommitmentsView({ onUpdate, username }: CommitmentsViewP
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {commitments.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 text-sm text-slate-500">
-                    {formatDate(c.data_inserimento)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900">{c.cliente}</div>
-                    <div className="text-xs text-slate-500 font-mono">{c.commessa}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900">{c.articolo_nome}</div>
-                    <div className="text-xs text-slate-500">{c.articolo_codice}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800 mb-1">
-                      {c.fase_produzione || 'Generico'}
-                    </div>
-                    <div className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ml-2 mb-1 ${
-                      c.stato_lavorazione === 'Completato' ? 'bg-emerald-100 text-emerald-800' :
-                      c.stato_lavorazione === 'In Lavorazione' ? 'bg-blue-100 text-blue-800' :
-                      c.stato_lavorazione === 'Annullato' ? 'bg-red-100 text-red-800' :
-                      'bg-slate-100 text-slate-800'
-                    }`}>
-                      {c.stato_lavorazione || 'Pianificato'}
-                    </div>
-                    {c.note && (
-                      <div className="text-xs text-slate-500 italic max-w-[150px] truncate" title={c.note}>
-                        {c.note}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {c.priorita > 0 ? (
-                      <div className={`inline-flex flex-col items-center px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tighter ${
-                        c.priorita <= 3 ? 'bg-red-50 text-red-600 border border-red-100 animate-pulse' :
-                        c.priorita <= 10 ? 'bg-orange-50 text-orange-600 border border-orange-100' :
-                        c.priorita <= 20 ? 'bg-amber-50 text-amber-600 border border-amber-100' :
-                        'bg-blue-50 text-blue-600 border border-blue-100'
-                      }`}>
-                        <span>{c.priorita}</span>
-                        <span className="text-[8px] leading-none opacity-70">
-                          {c.priorita <= 3 ? 'Urgente' :
-                           c.priorita <= 10 ? 'Alta' :
-                           c.priorita <= 20 ? 'Media' : 'Bassa'}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="text-slate-300 text-xs">-</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-sm font-bold">
-                      {c.quantita}
-                    </span>
-                  </td>
-                  {(isAuthorized || username.toLowerCase() === 'samantalimonta') && (
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        {isAuthorized && c.stato_lavorazione !== 'Completato' && (
-                          <button
-                            onClick={() => handleFulfill(c.id)}
-                            className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-                            title="Segna come pronto per la consegna (scala pezzi)"
-                          >
-                            <CheckCircle2 className="h-4 w-4" />
-                            Pronto
-                          </button>
+              {(commitments || []).map((c) => {
+                if (editingId === c.id) {
+                  return (
+                    <tr key={c.id} className="bg-blue-50/50">
+                      <td className="px-4 py-3 text-sm text-slate-500">
+                        {formatDate(c.data_inserimento)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-2">
+                          <input
+                            type="text"
+                            value={editForm.cliente}
+                            onChange={(e) => setEditForm({ ...editForm, cliente: e.target.value })}
+                            className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="Cliente"
+                          />
+                          <input
+                            type="text"
+                            value={editForm.commessa}
+                            onChange={(e) => setEditForm({ ...editForm, commessa: e.target.value })}
+                            className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                            placeholder="Commessa"
+                          />
+                          <input
+                            type="text"
+                            value={editForm.note}
+                            onChange={(e) => setEditForm({ ...editForm, note: e.target.value })}
+                            className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="Mese / Note"
+                          />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <select
+                          value={editForm.articolo_id}
+                          onChange={(e) => setEditForm({ ...editForm, articolo_id: e.target.value })}
+                          className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          <option value="">Seleziona articolo...</option>
+                          {(articles || []).map(a => (
+                            <option key={a.id} value={a.id}>{a.nome} ({a.codice})</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800 mb-1">
+                          {c.fase_produzione || 'Generico'}
+                        </div>
+                        <div className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ml-2 mb-1 ${
+                          c.stato_lavorazione === 'Completato' ? 'bg-emerald-100 text-emerald-800' :
+                          c.stato_lavorazione === 'In Lavorazione' ? 'bg-blue-100 text-blue-800' :
+                          c.stato_lavorazione === 'Annullato' ? 'bg-red-100 text-red-800' :
+                          'bg-slate-100 text-slate-800'
+                        }`}>
+                          {c.stato_lavorazione || 'Pianificato'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {c.priorita > 0 ? (
+                          <div className={`inline-flex flex-col items-center px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tighter ${
+                            c.priorita <= 3 ? 'bg-red-50 text-red-600 border border-red-100 animate-pulse' :
+                            c.priorita <= 10 ? 'bg-orange-50 text-orange-600 border border-orange-100' :
+                            c.priorita <= 20 ? 'bg-amber-50 text-amber-600 border border-amber-100' :
+                            'bg-blue-50 text-blue-600 border border-blue-100'
+                          }`}>
+                            <span>{c.priorita}</span>
+                            <span className="text-[8px] leading-none opacity-70">
+                              {c.priorita <= 3 ? 'Urgente' :
+                               c.priorita <= 10 ? 'Alta' :
+                               c.priorita <= 20 ? 'Media' : 'Bassa'}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 text-xs">-</span>
                         )}
-                        {username.toLowerCase() === 'samantalimonta' && c.stato_lavorazione === 'Completato' && (
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <input
+                          type="number"
+                          min="1"
+                          value={editForm.quantita}
+                          onChange={(e) => setEditForm({ ...editForm, quantita: parseInt(e.target.value) || 0 })}
+                          className="w-20 px-2 py-1 text-sm text-center border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-bold"
+                        />
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
                           <button
-                            onClick={() => handleShip(c.id)}
-                            className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-                            title="Segna come spedito (rimuove dalla lista)"
+                            onClick={() => saveEdit(c.id)}
+                            className="p-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-md transition-colors"
+                            title="Salva"
                           >
-                            <Truck className="h-4 w-4" />
-                            Spedisci
+                            <Check className="h-4 w-4" />
                           </button>
-                        )}
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="p-1.5 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-md transition-colors"
+                            title="Annulla"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+
+                return (
+                  <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 text-sm text-slate-500">
+                      {formatDate(c.data_inserimento)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-900">{c.cliente}</div>
+                      <div className="text-xs text-slate-500 font-mono">
+                        {c.commessa}
+                        {(() => {
+                          const { additionalNote } = parseNote(c.note);
+                          return additionalNote && <span className="text-emerald-600 ml-1 font-bold">N.B: {additionalNote}</span>;
+                        })()}
                       </div>
                     </td>
-                  )}
-                </tr>
-              ))}
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-900">{c.articolo_nome}</div>
+                      <div className="text-xs text-slate-500">{c.articolo_codice}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800 mb-1">
+                        {c.fase_produzione || 'Generico'}
+                      </div>
+                      <div className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ml-2 mb-1 ${
+                        c.stato_lavorazione === 'Completato' ? 'bg-emerald-100 text-emerald-800' :
+                        c.stato_lavorazione === 'In Lavorazione' ? 'bg-blue-100 text-blue-800' :
+                        c.stato_lavorazione === 'Annullato' ? 'bg-red-100 text-red-800' :
+                        'bg-slate-100 text-slate-800'
+                      }`}>
+                        {c.stato_lavorazione || 'Pianificato'}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {c.priorita > 0 ? (
+                        <div className={`inline-flex flex-col items-center px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tighter ${
+                          c.priorita <= 3 ? 'bg-red-50 text-red-600 border border-red-100 animate-pulse' :
+                          c.priorita <= 10 ? 'bg-orange-50 text-orange-600 border border-orange-100' :
+                          c.priorita <= 20 ? 'bg-amber-50 text-amber-600 border border-amber-100' :
+                          'bg-blue-50 text-blue-600 border border-blue-100'
+                        }`}>
+                          <span>{c.priorita}</span>
+                          <span className="text-[8px] leading-none opacity-70">
+                            {c.priorita <= 3 ? 'Urgente' :
+                             c.priorita <= 10 ? 'Alta' :
+                             c.priorita <= 20 ? 'Media' : 'Bassa'}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-300 text-xs">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-sm font-bold">
+                        {c.quantita}
+                      </span>
+                    </td>
+                    {(isAuthorized || username.toLowerCase() === 'samantalimonta') && (
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          {isAuthorized && c.stato_lavorazione !== 'Completato' && (
+                            <button
+                              onClick={() => handleFulfill(c.id)}
+                              className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                              title="Segna come pronto per la consegna (scala pezzi)"
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                              Pronto
+                            </button>
+                          )}
+                          {username.toLowerCase() === 'samantalimonta' && c.stato_lavorazione === 'Completato' && (
+                            <button
+                              onClick={() => handleShip(c.id)}
+                              className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                              title="Segna come spedito (rimuove dalla lista)"
+                            >
+                              <Truck className="h-4 w-4" />
+                              Spedisci
+                            </button>
+                          )}
+                          {canEdit && (
+                            <button
+                              onClick={() => startEdit(c)}
+                              className="inline-flex items-center gap-1 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                              title="Modifica impegno"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

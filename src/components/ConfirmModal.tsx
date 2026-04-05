@@ -1,23 +1,45 @@
-import React from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
+import clsx from 'clsx';
 
 interface ConfirmModalProps {
   isOpen: boolean;
   title: string;
   message: string;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   onCancel: () => void;
+  variant?: 'danger' | 'info';
 }
 
-export default function ConfirmModal({ isOpen, title, message, onConfirm, onCancel }: ConfirmModalProps) {
+export default function ConfirmModal({ isOpen, title, message, onConfirm, onCancel, variant = 'danger' }: ConfirmModalProps) {
+  const [isLoading, setIsLoading] = useState(false);
+
   if (!isOpen) return null;
 
+  const handleConfirm = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    try {
+      await onConfirm();
+      setIsLoading(false);
+      onCancel();
+    } catch (error) {
+      console.error("ConfirmModal onConfirm error:", error);
+      setIsLoading(false);
+    }
+  };
+
+  const isDanger = variant === 'danger';
+
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 bg-slate-900/5 flex items-center justify-center z-[9999] p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300 relative z-[10000] border border-slate-200">
         <div className="p-6">
           <div className="flex items-start gap-4">
-            <div className="bg-red-100 p-2 rounded-full text-red-600 shrink-0">
+            <div className={clsx(
+              "p-2 rounded-full shrink-0",
+              isDanger ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
+            )}>
               <AlertTriangle className="h-6 w-6" />
             </div>
             <div className="flex-1">
@@ -34,13 +56,15 @@ export default function ConfirmModal({ isOpen, title, message, onConfirm, onCanc
             Annulla
           </button>
           <button
-            onClick={() => {
-              onConfirm();
-              onCancel();
-            }}
-            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+            onClick={handleConfirm}
+            disabled={isLoading}
+            className={clsx(
+              "px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2",
+              isDanger ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"
+            )}
           >
-            Conferma
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {isLoading ? 'Elaborazione...' : 'Conferma'}
           </button>
         </div>
       </div>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Article, Client, AUTHORIZED_USERS } from '../types';
 import { Plus, Package, Trash2, AlertCircle } from 'lucide-react';
-import { getDisponibilita, getCategory, isPhaseEnabled } from '../utils';
+import { getDisponibilita, getCategory, isPhaseEnabled, getPhaseAvailability } from '../utils';
 import { toast } from 'react-hot-toast';
 import clsx from 'clsx';
-import { fetchClients, updateArticle, addCommitment } from '../api';
+import { fetchClients, updateArticle, addCommitment, fetchProcesses, fetchCommitments, fetchCasseComplete } from '../api';
+import { Process, Commitment } from '../types';
 
 interface RegisterCommitmentProps {
   articles: Article[];
@@ -14,6 +15,9 @@ interface RegisterCommitmentProps {
 
 export default function RegisterCommitment({ articles, onUpdate, username }: RegisterCommitmentProps) {
   const [clients, setClients] = useState<Client[]>([]);
+  const [processes, setProcesses] = useState<Process[]>([]);
+  const [commitments, setCommitments] = useState<Commitment[]>([]);
+  const [casseComplete, setCasseComplete] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   
   // Form state
@@ -68,7 +72,7 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
     .map(r => articles.find(a => a.id === r.articoloId || a.codice === r.articoloId))
     .filter(Boolean) as Article[];
 
-  const availablePhases = ['Taglio', 'Piega', 'Saldatura', 'Verniciatura'].filter(phase => {
+  const availablePhases = ['Taglio', 'Piega', 'Saldatura', 'Verniciatura', 'Grezzo'].filter(phase => {
     if (selectedArticles.length === 0) return true;
     return selectedArticles.every(a => isPhaseEnabled(getCategory(a.nome, a.codice), phase));
   });
@@ -84,17 +88,25 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
     }
   }, [selectedArticles, faseProduzione, availablePhases]);
 
-  const loadClients = async () => {
+  const loadData = async () => {
     try {
-      const data = await fetchClients();
-      setClients(data);
+      const [clientsData, processesData, commitmentsData, casseCompleteData] = await Promise.all([
+        fetchClients(),
+        fetchProcesses(),
+        fetchCommitments(),
+        fetchCasseComplete()
+      ]);
+      setClients(clientsData);
+      setProcesses(processesData);
+      setCommitments(commitmentsData);
+      setCasseComplete(casseCompleteData);
     } catch (error: any) {
-      console.error("Error fetching clients:", error);
+      console.error("Error fetching data:", error);
     }
   };
 
   useEffect(() => {
-    loadClients();
+    loadData();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -102,14 +114,46 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
     const validRows = rows.filter(r => r.articoloId && r.quantita);
     if (!isAuthorized || validRows.length === 0 || !cliente || !commessa) return;
 
-    // Validate custom codes
+    // Validate custom codes and Casse Complete stock
     const itemsToSend: any[] = [];
     for (const row of validRows) {
       const article = articles.find(a => a.codice === row.articoloId || a.id === row.articoloId);
-      if (article) {
+      const cassaCompleta = casseComplete.find(c => c.articolo === row.articoloId);
+      const reqQty = parseInt(row.quantita.toString());
+
+      if (cassaCompleta) {
+        if (reqQty > cassaCompleta.totale) {
+          toast.error(`Disponibilità insufficiente per ${cassaCompleta.articolo}. Richiesti: ${reqQty}, Disponibili: ${cassaCompleta.totale}`);
+          return;
+        }
+        itemsToSend.push({
+          is_cassa_completa: true,
+          cassa_id: cassaCompleta.id,
+          codice_articolo: cassaCompleta.articolo,
+          quantita: reqQty
+        });
+      } else if (article) {
+        const cat = getCategory(article.nome || '', article.codice || '');
+        const isCassaCompleta = cat === 'INVOLUCRI AT' || cat === 'Strutture Agr';
+        
+        if (isCassaCompleta) {
+          if (faseProduzione !== 'Saldatura' && faseProduzione !== 'Verniciatura') {
+            toast.error(`Non è possibile impegnare casse complete (${article.codice}) nello stato ${faseProduzione}. Sono consentiti solo gli stati Saldato (SALD.) e Verniciato (VER.).`);
+            return;
+          }
+          
+          const process = processes.find(p => p.articolo_id === article.id);
+          const available = getPhaseAvailability(article, process, faseProduzione, commitments);
+          
+          if (reqQty > available) {
+            toast.error(`Disponibilità insufficiente per ${article.codice} in fase ${faseProduzione}. Richiesti: ${reqQty}, Disponibili: ${available}`);
+            return;
+          }
+        }
+
         itemsToSend.push({
           articolo_id: article.id,
-          quantita: parseInt(row.quantita.toString())
+          quantita: reqQty
         });
       } else {
         const upperCode = row.articoloId.toUpperCase();
@@ -127,37 +171,43 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
 
     setLoading(true);
     try {
-      for (const item of itemsToSend) {
+      const batchItems = itemsToSend.map(item => {
         let articolo_nome = '';
         let articolo_codice = item.codice_articolo || '';
 
         if (item.articolo_id) {
           const article = articles.find(a => a.id === item.articolo_id);
-          if (!article) {
-            throw new Error(`Articolo non trovato: ${item.articolo_id}`);
+          if (article) {
+            articolo_nome = article.nome;
+            articolo_codice = article.codice;
           }
-          
-          articolo_nome = article.nome;
-          articolo_codice = article.codice;
+        } else if (item.is_cassa_completa) {
+          articolo_nome = item.codice_articolo;
         } else {
           articolo_nome = `Commessa Speciale: ${articolo_codice}`;
         }
         
-        await addCommitment({
-          articolo_id: item.articolo_id || '',
+        return {
+          ...item,
           articolo_codice,
-          articolo_nome,
+          articolo_nome
+        };
+      });
+
+      await fetch('/api/commitments/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: batchItems,
           cliente,
           commessa,
-          quantita: item.quantita,
           priorita,
           fase_produzione: faseProduzione,
           note: mese ? (note ? `${mese} - ${note}` : mese) : note,
           stato_lavorazione: 'Pianificato',
-          data_inserimento: new Date().toISOString(),
           operatore: username
-        });
-      }
+        })
+      });
 
       toast.success('Impegni registrati con successo!');
       
@@ -243,15 +293,28 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
               <input 
                 type="text" 
                 value={commessa}
-                onChange={(e) => setCommessa(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none"
-                placeholder="Es. C-1234"
+                onChange={(e) => {
+                  let val = e.target.value;
+                  if (val) {
+                    const upper = val.toUpperCase();
+                    if (!upper.startsWith('C.')) {
+                      if (upper.startsWith('C')) {
+                        val = 'C.' + val.substring(1);
+                      } else {
+                        val = 'C.' + val;
+                      }
+                    }
+                  }
+                  setCommessa(val);
+                }}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none font-mono"
+                placeholder="Es. C.1234"
                 required
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Mese Riferimento (Opzionale)</label>
               <select 
@@ -265,6 +328,27 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
                 ))}
               </select>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Fase Produzione</label>
+              <select 
+                value={faseProduzione}
+                onChange={(e) => setFaseProduzione(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none"
+              >
+                <option value="Verniciatura" disabled={!availablePhases.includes('Verniciatura')}>Verniciatura</option>
+                <option value="Saldatura" disabled={!availablePhases.includes('Saldatura')}>Saldatura</option>
+                <option value="Piega" disabled={!availablePhases.includes('Piega')}>Piega (Gre.)</option>
+                <option value="Taglio" disabled={!availablePhases.includes('Taglio')}>Taglio</option>
+              </select>
+              {!availablePhases.includes(faseProduzione) && (
+                <p className="text-[10px] text-red-500 mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> Fase non disponibile per gli articoli selezionati
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Note Aggiuntive</label>
               <input 
@@ -289,10 +373,42 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
               </button>
             </div>
             
-            {rows.map((row, index) => (
+            {rows.map((row, index) => {
+              const article = articles.find(a => a.codice === row.articoloId || a.id === row.articoloId);
+              const cassaCompleta = casseComplete.find(c => c.articolo === row.articoloId);
+              let availableInfo = null;
+              
+              if (cassaCompleta) {
+                availableInfo = (
+                  <span className={clsx(
+                    "text-[9px] font-bold ml-2",
+                    cassaCompleta.totale > 0 ? "text-emerald-500" : "text-red-500"
+                  )}>
+                    (Disp: {cassaCompleta.totale})
+                  </span>
+                );
+              } else if (article) {
+                const cat = getCategory(article.nome || '', article.codice || '');
+                if (cat === 'INVOLUCRI AT' || cat === 'Strutture Agr') {
+                  const process = processes.find(p => p.articolo_id === article.id);
+                  const available = getPhaseAvailability(article, process, faseProduzione, commitments);
+                  availableInfo = (
+                    <span className={clsx(
+                      "text-[9px] font-bold ml-2",
+                      available > 0 ? "text-emerald-500" : "text-red-500"
+                    )}>
+                      (Disp: {available})
+                    </span>
+                  );
+                }
+              }
+
+              return (
               <div key={index} className="flex gap-2 mb-1.5 items-end bg-white p-1.5 rounded border border-slate-200 shadow-sm">
                 <div className="flex-1">
-                  <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-0.5">Articolo</label>
+                  <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-0.5">
+                    Articolo {availableInfo}
+                  </label>
                   <input 
                     list="articles-list"
                     value={row.articoloId}
@@ -304,6 +420,9 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
                   <datalist id="articles-list">
                     {articles.map(a => (
                       <option key={a.id} value={a.codice}>{a.nome}</option>
+                    ))}
+                    {casseComplete.map(c => (
+                      <option key={`cc-${c.id}`} value={c.articolo}>{c.articolo}</option>
                     ))}
                   </datalist>
                 </div>
@@ -329,28 +448,7 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
                   </button>
                 )}
               </div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-1 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Fase Produzione</label>
-              <select 
-                value={faseProduzione}
-                onChange={(e) => setFaseProduzione(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none"
-              >
-                <option value="Verniciatura" disabled={!availablePhases.includes('Verniciatura')}>Verniciatura</option>
-                <option value="Saldatura" disabled={!availablePhases.includes('Saldatura')}>Saldatura</option>
-                <option value="Piega" disabled={!availablePhases.includes('Piega')}>Piega (Gre.)</option>
-                <option value="Taglio" disabled={!availablePhases.includes('Taglio')}>Taglio</option>
-              </select>
-              {!availablePhases.includes(faseProduzione) && (
-                <p className="text-[10px] text-red-500 mt-1 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" /> Fase non disponibile per gli articoli selezionati
-                </p>
-              )}
-            </div>
+            )})}
           </div>
 
           <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">

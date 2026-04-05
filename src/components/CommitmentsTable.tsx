@@ -1,36 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Article, Commitment, AUTHORIZED_USERS } from '../types';
 import { Edit2, Check, X, Info } from 'lucide-react';
-import { fetchCommitments, updateArticle } from '../api';
+import { updateArticle } from '../api';
 import { toast } from 'react-hot-toast';
 
 interface CommitmentsTableProps {
   articles: Article[];
+  commitments: Commitment[];
   onUpdate: () => void;
   username: string;
+  role?: string;
 }
 
-export default function CommitmentsTable({ articles, onUpdate, username }: CommitmentsTableProps) {
+export default function CommitmentsTable({ articles, commitments, onUpdate, username, role }: CommitmentsTableProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [impegni, setImpegni] = useState<number>(0);
-  const [commitments, setCommitments] = useState<Commitment[]>([]);
 
-  const isAuthorized = AUTHORIZED_USERS.includes(username);
-
-  const loadCommitments = async () => {
-    try {
-      const data = await fetchCommitments();
-      setCommitments(data);
-    } catch (error) {
-      console.error("Error fetching commitments:", error);
-    }
-  };
-
-  useEffect(() => {
-    loadCommitments();
-    const interval = setInterval(loadCommitments, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  const isAuthorized = AUTHORIZED_USERS.includes(username) || role === 'developer';
 
   const handleUpdate = async (article: Article) => {
     if (!isAuthorized) return;
@@ -53,7 +39,11 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
   };
 
   // Sort articles by commitments (descending) to show most engaged items first
-  const sortedArticles = [...articles].sort((a, b) => b.impegni_clienti - a.impegni_clienti);
+  const sortedArticles = [...articles].sort((a, b) => {
+    const impA = commitments.filter(c => c.articolo_id === a.id && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
+    const impB = commitments.filter(c => c.articolo_id === b.id && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
+    return impB - impA;
+  });
 
   const getArticleCommitments = (articleId: string) => {
     return commitments.filter(c => c.articolo_id === articleId && c.stato_lavorazione !== 'Completato');
@@ -75,12 +65,33 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
     return "text-red-400 font-bold";
   };
 
+  const mesi = ['GENNAIO', 'FEBBRAIO', 'MARZO', 'APRILE', 'MAGGIO', 'GIUGNO', 'LUGLIO', 'AGOSTO', 'SETTEMBRE', 'OTTOBRE', 'NOVEMBRE', 'DICEMBRE'];
+  const parseNote = (note?: string) => {
+    if (!note) return { month: 'ALTRO', additionalNote: '' };
+    const parts = note.split(' - ');
+    if (parts.length > 1) {
+      const firstPart = parts[0].toUpperCase();
+      if (mesi.includes(firstPart)) {
+        return { month: firstPart, additionalNote: parts.slice(1).join(' - ') };
+      }
+    } else {
+      const noteUpper = note.toUpperCase();
+      if (mesi.includes(noteUpper)) {
+        return { month: noteUpper, additionalNote: '' };
+      }
+    }
+    return { month: 'ALTRO', additionalNote: note };
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-5 border-b border-slate-200/80 bg-white/50 backdrop-blur-sm flex items-center justify-between rounded-t-xl">
         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
           Impegni Clienti
         </h2>
+        <div className="text-sm font-medium text-slate-600 bg-slate-100 px-3 py-1 rounded-full">
+          Totale: {commitments.filter(c => c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0)}
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto custom-scrollbar">
@@ -136,60 +147,73 @@ export default function CommitmentsTable({ articles, onUpdate, username }: Commi
                       <div className="absolute left-4 top-full mt-1 z-50 hidden group-hover/tooltip:block w-72 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 border border-slate-700">
                         <div className="font-bold mb-2 border-b border-slate-600 pb-1">Dettaglio Impegni</div>
                         <ul className="space-y-2">
-                          {articleCommitments.map(c => (
-                            <li key={`${c.id}-tooltip-1`} className="flex justify-between items-start">
-                              <div>
-                                <div className="font-medium text-emerald-400">{c.cliente}</div>
-                                <div className="text-slate-400 font-mono text-[10px]">{c.commessa}</div>
-                                {c.note && <div className="text-[9px] text-emerald-300 italic">Note: {c.note}</div>}
-                                <div className="text-[10px] mt-0.5 text-slate-300">
-                                  Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span>
-                                  {c.priorita > 0 && (
-                                    <span className={`ml-2 px-1 rounded bg-slate-700 ${getPrioritaColor(c.priorita)}`}>
-                                      P: {getPrioritaLabel(c.priorita)}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
-                            </li>
-                          ))}
+                                {articleCommitments.map(c => {
+                                  const { additionalNote } = parseNote(c.note);
+                                  return (
+                                    <li key={`${c.id}-tooltip-1`} className="flex justify-between items-start">
+                                      <div>
+                                        <div className="font-medium text-emerald-400">{c.cliente}</div>
+                                        <div className="text-slate-400 font-mono text-[10px]">
+                                          {c.commessa}
+                                          {additionalNote && <span className="text-emerald-300 ml-1 font-bold">N.B: {additionalNote}</span>}
+                                        </div>
+                                        <div className="text-[10px] mt-0.5 text-slate-300">
+                                          Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span>
+                                          {c.priorita > 0 && (
+                                            <span className={`ml-2 px-1 rounded bg-slate-700 ${getPrioritaColor(c.priorita)}`}>
+                                              P: {getPrioritaLabel(c.priorita)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
+                                    </li>
+                                  );
+                                })}
                         </ul>
                       </div>
                     )}
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-bold text-slate-700 group/tooltip cursor-help">
-                    {article.impegni_clienti > 0 ? (
-                      <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-xs">
-                        {article.impegni_clienti}
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">0</span>
-                    )}
+                    {(() => {
+                      const totalImp = articleCommitments.reduce((sum, c) => sum + c.quantita, 0);
+                      return totalImp > 0 ? (
+                        <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-xs">
+                          {totalImp}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">0</span>
+                      );
+                    })()}
                     
                     {/* Tooltip for number as well */}
                     {hasCommitments && (
                       <div className="absolute right-16 top-full mt-1 z-50 hidden group-hover/tooltip:block w-72 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 border border-slate-700 text-left">
                         <div className="font-bold mb-2 border-b border-slate-600 pb-1">Dettaglio Impegni</div>
                         <ul className="space-y-2">
-                          {articleCommitments.map(c => (
-                            <li key={`${c.id}-tooltip-2`} className="flex justify-between items-start">
-                              <div>
-                                <div className="font-medium text-emerald-400">{c.cliente}</div>
-                                <div className="text-slate-400 font-mono text-[10px]">{c.commessa}</div>
-                                {c.note && <div className="text-[9px] text-emerald-300 italic">Note: {c.note}</div>}
-                                <div className="text-[10px] mt-0.5 text-slate-300">
-                                  Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span>
-                                  {c.priorita > 0 && (
-                                    <span className={`ml-2 px-1 rounded bg-slate-700 ${getPrioritaColor(c.priorita)}`}>
-                                      P: {getPrioritaLabel(c.priorita)}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
-                            </li>
-                          ))}
+                                {articleCommitments.map(c => {
+                                  const { additionalNote } = parseNote(c.note);
+                                  return (
+                                    <li key={`${c.id}-tooltip-2`} className="flex justify-between items-start">
+                                      <div>
+                                        <div className="font-medium text-emerald-400">{c.cliente}</div>
+                                        <div className="text-slate-400 font-mono text-[10px]">
+                                          {c.commessa}
+                                          {additionalNote && <span className="text-emerald-300 ml-1 font-bold">N.B: {additionalNote}</span>}
+                                        </div>
+                                        <div className="text-[10px] mt-0.5 text-slate-300">
+                                          Stato: <span className="font-semibold text-white">{c.stato_lavorazione || 'Pianificato'}</span>
+                                          {c.priorita > 0 && (
+                                            <span className={`ml-2 px-1 rounded bg-slate-700 ${getPrioritaColor(c.priorita)}`}>
+                                              P: {getPrioritaLabel(c.priorita)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <span className="bg-slate-700 px-1.5 py-0.5 rounded font-bold">{c.quantita} pz</span>
+                                    </li>
+                                  );
+                                })}
                         </ul>
                       </div>
                     )}

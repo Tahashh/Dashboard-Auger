@@ -16,17 +16,29 @@ export default function ClientsView({ username, isAuthorized }: ClientsViewProps
   const [nome, setNome] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editNome, setEditNome] = useState('');
-  const [confirmModal, setConfirmModal] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void | Promise<void>;
+    variant?: 'danger' | 'info';
+  }>({
     isOpen: false,
     title: '',
     message: '',
-    onConfirm: () => {}
+    onConfirm: () => {},
+    variant: 'danger'
   });
 
   const loadClients = async () => {
     try {
       const data = await fetchClients();
-      setClients(data);
+      if (Array.isArray(data)) {
+        setClients(data);
+      } else {
+        console.error("Data received for clients is not an array:", data);
+        setClients([]);
+      }
     } catch (error) {
       console.error("Error fetching clients:", error);
     } finally {
@@ -36,7 +48,7 @@ export default function ClientsView({ username, isAuthorized }: ClientsViewProps
 
   useEffect(() => {
     loadClients();
-    const interval = setInterval(loadClients, 5000);
+    const interval = setInterval(loadClients, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -111,6 +123,7 @@ export default function ClientsView({ username, isAuthorized }: ClientsViewProps
         message={confirmModal.message}
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        variant={confirmModal.variant}
       />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Form Section */}

@@ -4,7 +4,7 @@ import { getCategory, isPhaseEnabled } from '../utils';
 import { ArrowRightLeft, Plus, Minus, Edit3, PackageCheck, X, AlertTriangle, CheckSquare, Square, Loader2, AlertCircle, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { toast } from 'react-hot-toast';
-import { fetchCommitments, fetchArticles, fetchProcesses, updateArticle, updateProcess, updateCommitment, addMovementLog } from '../api';
+import { fetchCommitments, fetchArticles, fetchProcesses, updateArticle, updateProcess, updateCommitment, addMovementLog, fulfillByCommessa } from '../api';
 
 interface CommitmentWithStock extends Commitment {
   verniciati: number;
@@ -17,9 +17,10 @@ interface ProductionMovementProps {
   articles: Article[];
   onUpdate: () => void;
   username?: string;
+  role?: string;
 }
 
-export default function ProductionMovement({ articles, onUpdate, username }: ProductionMovementProps) {
+export default function ProductionMovement({ articles, onUpdate, username, role }: ProductionMovementProps) {
   const [rows, setRows] = useState<{ articoloId: string; quantita: number | '' }[]>([{ articoloId: '', quantita: '' }]);
   const [fase, setFase] = useState<string>('taglio');
   const [tipo, setTipo] = useState<string>('carico');
@@ -56,7 +57,8 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
     setLoading(true);
     try {
       const allCommitments = await fetchCommitments();
-      const filteredCommitments = allCommitments.filter(c => c.commessa === commessaDaScaricare);
+      const commitmentsArray = Array.isArray(allCommitments) ? allCommitments : [];
+      const filteredCommitments = commitmentsArray.filter(c => c.commessa === commessaDaScaricare);
       
       if (filteredCommitments.length === 0) {
         toast.error('Nessun impegno trovato per questa commessa');
@@ -111,168 +113,19 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
       return;
     }
 
-    // Check if all selected items have enough stock
-    const missingItems = selectedIds.map(id => {
-      const item = commessaItems.find(i => i.id === id);
-      if (!item) return null;
-      
-      let available = 0;
-      let tipo = '';
-      const fase = item.fase_produzione?.toLowerCase() || 'generico';
-      
-      if (fase === 'taglio') {
-        available = item.taglio;
-        tipo = 'tagliati';
-      } else if (fase === 'piega') {
-        available = item.piega;
-        tipo = 'piegati';
-      } else if (fase === 'saldatura') {
-        available = item.saldatura;
-        tipo = 'saldati';
-      } else if (fase === 'verniciatura') {
-        available = item.verniciati;
-        tipo = 'verniciati';
-      } else {
-        // Generico
-        const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
-        available = isPiastra ? item.piega : item.verniciati;
-        tipo = isPiastra ? 'piegate' : 'verniciate';
-      }
-      
-      if (available < item.quantita) {
-        return {
-          nome: item.articolo_nome,
-          mancanti: item.quantita - available,
-          tipo
-        };
-      }
-      return null;
-    }).filter(Boolean);
-
-    if (missingItems.length > 0) {
-      const errorMsg = missingItems.map(m => `${m!.nome}: mancano ${m!.mancanti} pz ${m!.tipo}`).join('\n');
-      toast.error(`Impossibile evadere: stock insufficiente.\n${errorMsg}`, { duration: 6000 });
-      return;
-    }
-
     setLoading(true);
     try {
-      const allArticles = await fetchArticles();
-      const allProcesses = await fetchProcesses();
-      const itemsToFulfill = commessaItems.filter(item => selectedIds.includes(item.id));
-      
-      for (const item of itemsToFulfill) {
-        const articleData = allArticles.find(a => a.id === item.articolo_id);
-        const processData = allProcesses.find(p => p.articolo_id === item.articolo_id);
-        
-        if (!articleData) {
-          throw new Error(`Articolo non trovato: ${item.articolo_nome}`);
-        }
-        
-        const fase = item.fase_produzione?.toLowerCase() || 'generico';
-        
-        if (fase === 'taglio') {
-          if (!processData) throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
-          if (processData.taglio < item.quantita) throw new Error(`Stock taglio insufficiente per ${item.articolo_nome}`);
-          
-          await updateProcess(processData.id, {
-            taglio: processData.taglio - item.quantita
-          });
-        } else if (fase === 'piega') {
-          if (!processData) throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
-          if (processData.piega < item.quantita) throw new Error(`Stock piega insufficiente per ${item.articolo_nome}`);
-          
-          await updateProcess(processData.id, {
-            piega: processData.piega - item.quantita
-          });
-          await updateArticle(articleData.id, {
-            piega: Math.max(0, (articleData.piega || 0) - item.quantita)
-          });
-        } else if (fase === 'saldatura') {
-          if (!processData) throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
-          if (processData.saldatura < item.quantita) throw new Error(`Stock saldatura insufficiente per ${item.articolo_nome}`);
-          
-          await updateProcess(processData.id, {
-            saldatura: processData.saldatura - item.quantita
-          });
-        } else if (fase === 'verniciatura') {
-          if (articleData.verniciati < item.quantita) throw new Error(`Stock verniciati insufficiente per ${item.articolo_nome}`);
-          
-          await updateArticle(articleData.id, {
-            verniciati: articleData.verniciati - item.quantita
-          });
-          if (processData) {
-            await updateProcess(processData.id, {
-              verniciatura: Math.max(0, (processData.verniciatura || 0) - item.quantita)
-            });
-          }
-        } else {
-          // Generico
-          const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
-          
-          if (isPiastra) {
-            if (!processData) {
-              throw new Error(`Processo non trovato per: ${item.articolo_nome}`);
-            }
-            
-            if (processData.piega < item.quantita) {
-              throw new Error(`Stock piega insufficiente per ${item.articolo_nome}`);
-            }
-            
-            await updateProcess(processData.id, {
-              piega: processData.piega - item.quantita
-            });
-            
-            await updateArticle(articleData.id, {
-              piega: (articleData.piega || 0) - item.quantita
-            });
-          } else {
-            if (articleData.verniciati < item.quantita) {
-              throw new Error(`Stock verniciati insufficiente per ${item.articolo_nome}`);
-            }
-            
-            await updateArticle(articleData.id, {
-              verniciati: articleData.verniciati - item.quantita
-            });
-            
-            if (processData) {
-              await updateProcess(processData.id, {
-                verniciatura: Math.max(0, (processData.verniciatura || 0) - item.quantita)
-              });
-            }
-          }
-        }
-        
-        // Update impegni_clienti
-        await updateArticle(articleData.id, {
-          impegni_clienti: Math.max(0, (articleData.impegni_clienti || 0) - item.quantita)
-        });
-        
-        // Mark commitment as completed
-        await updateCommitment(item.id, {
-          stato_lavorazione: 'Completato',
-          timestamp_modifica: new Date().toISOString()
-        });
-        
-        // Log movement
-        await addMovementLog({
-          articolo_id: item.articolo_id,
-          articolo_nome: item.articolo_nome,
-          articolo_codice: item.articolo_codice,
-          fase: 'impegni_evasione',
-          tipo: 'evasione',
-          quantita: item.quantita,
-          operatore: username || 'System',
-          timestamp: new Date().toISOString(),
-          cliente: item.cliente,
-          commessa: item.commessa
-        });
+      const result = await fulfillByCommessa(commessaDaScaricare, selectedIds, username || 'System');
+      if (result && result.success) {
+        toast.success('Articoli evasi con successo!');
+        setCommessaDaScaricare('');
+        setCommessaItems([]);
+        setSelectedIds([]);
+        setShowModal(false);
+        onUpdate();
+      } else {
+        toast.error(result.error || 'Errore durante l\'evasione');
       }
-
-      toast.success('Commessa evasa con successo!');
-      setCommessaDaScaricare('');
-      setShowModal(false);
-      onUpdate();
     } catch (error: any) {
       console.error(error);
       toast.error(error.message || 'Errore durante lo scarico');
@@ -295,11 +148,10 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
       return;
     }
     
-    const validRows = rows.filter(r => r.articoloId && r.quantita);
+    const validRows = rows.filter(r => r.articoloId && r.quantita !== '');
     if (validRows.length === 0) return;
 
     setLoading(true);
-
     try {
       const allArticles = await fetchArticles();
       const allProcesses = await fetchProcesses();
@@ -309,7 +161,21 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
         if (!article) throw new Error(`Articolo non trovato: ${row.articoloId}`);
         
         const qty = parseInt(row.quantita.toString(), 10);
-        if (isNaN(qty) || qty < 0) throw new Error(`Quantità non valida per ${article.nome}`);
+        if (isNaN(qty) || qty < 0 || (qty === 0 && tipo !== 'rettifica')) throw new Error(`Quantità non valida per ${article.nome}`);
+
+        const category = getCategory(article.nome, article.codice);
+        const catLower = category.toLowerCase();
+
+        if (fase === 'saldatura' || fase === 'verniciatura') {
+          if (catLower.includes('piastre')) {
+            throw new Error(`Non è possibile registrare movimenti in ${fase} per ${article.nome}. Le piastre hanno solo la fase di piegatura (grezzo).`);
+          }
+        }
+        if (fase === 'saldatura') {
+          if (tipo === 'carico' && (catLower.includes('porte') || catLower.includes('retri') || catLower.includes('tetti') || catLower.includes('laterali'))) {
+            throw new Error(`Non è possibile aggiungere un carico alla saldatura per ${article.nome}. Questi articoli vanno saldati ma vengono registrati solo nel grezzo.`);
+          }
+        }
 
         const processData = allProcesses.find(p => p.articolo_id === article.id);
         if (!processData) throw new Error(`Processi non trovati per ${article.nome}`);
@@ -318,8 +184,8 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
           articolo_id: article.id,
           articolo_nome: article.nome,
           articolo_codice: article.codice,
-          fase,
-          tipo,
+          fase: tipo === 'scarico' ? 'Scarico' : fase,
+          tipo: tipo === 'scarico' ? 'scarico da commessa' : tipo,
           quantita: qty,
           operatore: username || 'System',
           timestamp: new Date().toISOString()
@@ -350,9 +216,10 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Fase / Reparto</label>
           <select 
-            value={fase}
+            value={role === 'taglio_only' ? 'taglio' : fase}
             onChange={(e) => setFase(e.target.value)}
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none"
+            disabled={role === 'taglio_only'}
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 outline-none disabled:bg-slate-100 disabled:text-slate-500"
           >
             <option value="taglio">Taglio</option>
             <option value="piega">Piega (Gre.)</option>
@@ -377,9 +244,22 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
               <input 
                 type="text" 
                 value={commessaDaScaricare}
-                onChange={(e) => setCommessaDaScaricare(e.target.value)}
-                className="w-full border border-indigo-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                placeholder="Es. C-1234"
+                onChange={(e) => {
+                  let val = e.target.value;
+                  if (val) {
+                    const upper = val.toUpperCase();
+                    if (!upper.startsWith('C.')) {
+                      if (upper.startsWith('C')) {
+                        val = 'C.' + val.substring(1);
+                      } else {
+                        val = 'C.' + val;
+                      }
+                    }
+                  }
+                  setCommessaDaScaricare(val);
+                }}
+                className="w-full border border-indigo-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                placeholder="Es. C.1234"
                 required
               />
             </div>
@@ -420,7 +300,7 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
                     <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-0.5">Quantità</label>
                     <input 
                       type="number" 
-                      min="1"
+                      min={tipo === 'rettifica' ? "0" : "1"}
                       value={row.quantita}
                       onChange={(e) => updateRow(index, 'quantita', e.target.value === '' ? '' : parseInt(e.target.value))}
                       className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs focus:ring-1 focus:ring-slate-900 outline-none"
@@ -485,7 +365,7 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
         <div className="mt-auto pt-4">
           <button
             type="submit"
-            disabled={loading || (fase === 'impegni' ? !commessaDaScaricare : rows.filter(r => r.articoloId && r.quantita).length === 0)}
+            disabled={loading || (fase === 'impegni' ? !commessaDaScaricare : rows.filter(r => r.articoloId && r.quantita !== '').length === 0)}
             className={clsx(
               "w-full text-white font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
               fase === 'impegni' ? "bg-indigo-600 hover:bg-indigo-700" : "bg-slate-900 hover:bg-slate-800"
@@ -498,134 +378,117 @@ export default function ProductionMovement({ articles, onUpdate, username }: Pro
 
       {/* Modal Scarico Commessa */}
       {showModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="bg-indigo-100 p-2 rounded-lg">
-                  <PackageCheck className="h-5 w-5 text-indigo-600" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-800">Verifica Scarico Commessa</h3>
-                  <p className="text-xs text-slate-500 font-mono">{commessaDaScaricare}</p>
-                </div>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm font-sans">
+          
+          {/* POPUP ARTICOLI */}
+          <div className="bg-white rounded-[14px] shadow-[0_10px_30px_rgba(0,0,0,0.15)] p-4 w-[600px] max-h-[80vh] flex flex-col animate-in zoom-in-95 duration-200">
+            <div className="mb-2.5 flex justify-between items-center">
+              <div>
+                <h3 className="text-base font-semibold text-slate-800">Articoli commessa</h3>
+                <p className="text-xs text-slate-500 font-mono font-bold">{commessaDaScaricare}</p>
               </div>
-              <button 
-                onClick={() => setShowModal(false)}
-                className="p-2 hover:bg-slate-200 rounded-full transition-colors"
-              >
-                <X className="h-5 w-5 text-slate-400" />
-              </button>
+              <div className="text-xs text-slate-500">
+                Selezionati: <span className="font-bold text-indigo-600">{selectedIds.length}</span>/{commessaItems.length}
+              </div>
             </div>
 
-            <div className="p-6 overflow-y-auto flex-1">
-              <div className="mb-6 p-4 bg-amber-50 border border-amber-100 rounded-xl flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                <div className="text-sm text-amber-800">
-                  <p className="font-bold mb-1">Attenzione</p>
-                  <p>Seleziona solo gli articoli fisicamente pronti per la spedizione. Gli articoli non selezionati rimarranno come impegni attivi.</p>
-                </div>
+            <div className="grid grid-cols-[40px_1fr_80px_80px] items-center font-semibold text-xs text-gray-500 pb-1.5 border-b border-gray-200">
+              <div className="flex justify-center">
+                <input 
+                  type="checkbox" 
+                  checked={selectedIds.length === commessaItems.length && commessaItems.length > 0}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedIds(commessaItems.map(i => i.id));
+                    } else {
+                      setSelectedIds([]);
+                    }
+                  }}
+                  className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
               </div>
+              <span>Articolo</span>
+              <span className="text-center">Q.tà</span>
+              <span className="text-right pr-2">Stock</span>
+            </div>
 
-              <div className="space-y-3">
-                <div className="grid grid-cols-12 gap-2 text-[10px] uppercase font-bold text-slate-400 px-2">
-                  <div className="col-span-1"></div>
-                  <div className="col-span-6">Articolo</div>
-                  <div className="col-span-2 text-center">Q.tà</div>
-                  <div className="col-span-3 text-right">Stock Disp.</div>
-                </div>
-                
-                {commessaItems.map((item) => {
-                  const isSelected = selectedIds.includes(item.id);
-                  const fase = item.fase_produzione?.toLowerCase() || 'generico';
-                  let available = 0;
-                  let tipo = '';
-                  if (fase === 'taglio') {
-                    available = item.taglio;
-                    tipo = 'tagliati';
-                  } else if (fase === 'piega') {
-                    available = item.piega;
-                    tipo = 'piegati';
-                  } else if (fase === 'saldatura') {
-                    available = item.saldatura;
-                    tipo = 'saldati';
-                  } else if (fase === 'verniciatura') {
-                    available = item.verniciati;
-                    tipo = 'verniciati';
-                  } else {
-                    const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
-                    available = isPiastra ? item.piega : item.verniciati;
-                    tipo = isPiastra ? 'piegate' : 'verniciate';
-                  }
-                  const hasStock = available >= item.quantita;
+            <div className="overflow-y-auto flex-1 mt-2 min-h-[300px] max-h-[60vh] light-scrollbar pr-2">
+              {commessaItems.map((item) => {
+                const isSelected = selectedIds.includes(item.id);
+                const fase = item.fase_produzione?.toLowerCase() || 'generico';
+                let available = 0;
+                let tipo = '';
+                if (fase === 'taglio') {
+                  available = item.taglio;
+                  tipo = 'tag';
+                } else if (fase === 'piega') {
+                  available = item.piega;
+                  tipo = 'gre';
+                } else if (fase === 'saldatura') {
+                  available = item.saldatura;
+                  tipo = 'sal';
+                } else if (fase === 'verniciatura') {
+                  available = item.verniciati;
+                  tipo = 'ver';
+                } else {
+                  const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
+                  available = isPiastra ? item.piega : item.verniciati;
+                  tipo = isPiastra ? 'gre' : 'ver';
+                }
+                const hasStock = available >= item.quantita;
 
-                  return (
-                    <div 
-                      key={item.id}
-                      onClick={() => toggleSelection(item.id)}
-                      className={clsx(
-                        "grid grid-cols-12 gap-2 items-center p-3 rounded-xl border transition-all cursor-pointer",
-                        isSelected 
-                          ? "bg-indigo-50 border-indigo-200" 
-                          : "bg-white border-slate-100 opacity-60 grayscale-[0.5]"
-                      )}
-                    >
-                      <div className="col-span-1 flex justify-center">
-                        {isSelected ? (
-                          <CheckSquare className="h-5 w-5 text-indigo-600" />
-                        ) : (
-                          <Square className="h-5 w-5 text-slate-300" />
-                        )}
-                      </div>
-                      <div className="col-span-6">
-                        <div className="font-bold text-slate-800 text-sm truncate">{item.articolo_nome}</div>
-                        <div className="text-[10px] text-slate-500 font-mono">{item.articolo_codice}</div>
-                      </div>
-                      <div className="col-span-2 text-center">
-                        <span className="bg-white border border-slate-200 px-2 py-1 rounded font-bold text-slate-700 text-xs">
-                          {item.quantita}
-                        </span>
-                      </div>
-                      <div className="col-span-3 text-right">
-                        <div className={clsx(
-                          "text-xs font-bold",
-                          hasStock ? "text-emerald-600" : "text-red-600"
-                        )}>
-                          {available} pz {tipo === 'tagliati' ? '(Tag.)' : tipo === 'saldati' ? '(Sal.)' : tipo === 'piegati' || tipo === 'piegate' ? '(Gre.)' : '(Ver.)'}
-                        </div>
-                        {!hasStock && isSelected && (
-                          <div className="text-[9px] text-red-500 font-medium">Stock insufficiente!</div>
-                        )}
-                      </div>
+                return (
+                  <div 
+                    key={item.id} 
+                    className="grid grid-cols-[40px_1fr_80px_80px] items-center py-2 border-b border-gray-100 text-xs hover:bg-slate-50 transition-colors cursor-pointer"
+                    onClick={() => toggleSelection(item.id)}
+                  >
+                    <div className="flex justify-center">
+                      <input 
+                        type="checkbox" 
+                        checked={isSelected} 
+                        onChange={() => {}} // Handled by parent div click
+                        className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-3">
-              <button
-                onClick={() => setShowModal(false)}
-                className="flex-1 px-4 py-2.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-100 transition-colors"
-              >
-                Annulla
-              </button>
-              <button
-                onClick={handleConfirmFulfillment}
-                disabled={loading || selectedIds.length === 0}
-                className="flex-[2] px-4 py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
-              >
-                {loading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <PackageCheck className="h-5 w-5" />
-                )}
-                Conferma Scarico ({selectedIds.length})
-              </button>
+                    <div className="truncate pr-2 flex flex-col">
+                      <span className="font-medium text-slate-800 truncate text-[13px]">{item.articolo_nome}</span>
+                      <span className="text-[9px] text-slate-500 font-mono">{item.articolo_codice}</span>
+                    </div>
+                    <span className="text-center font-medium">{item.quantita}</span>
+                    <div className="text-right pr-2 flex flex-col items-end">
+                      <span className={clsx("font-semibold text-xs", hasStock ? "text-[#2e7d32]" : "text-[#e53935]")}>
+                        {available}
+                      </span>
+                      <span className="text-[8px] uppercase text-slate-400">{tipo}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
+
+          {/* POPUP AZIONI */}
+          <div className="bg-white rounded-[14px] shadow-[0_10px_30px_rgba(0,0,0,0.15)] p-4 ml-5 flex flex-col gap-2.5 h-fit w-[150px] animate-in slide-in-from-right-8 duration-300">
+            <button 
+              onClick={handleConfirmFulfillment}
+              disabled={loading || selectedIds.length === 0}
+              className="p-3 rounded-[10px] border-none font-semibold cursor-pointer bg-gradient-to-br from-[#5b5fff] to-[#7a5cff] text-white disabled:opacity-50 flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              Conferma
+            </button>
+            <button 
+              onClick={() => setShowModal(false)}
+              className="p-3 rounded-[10px] border-none font-semibold cursor-pointer bg-[#f3f4f6] text-slate-700 hover:bg-gray-200 transition-colors"
+            >
+              Annulla
+            </button>
+          </div>
+
         </div>
       )}
+
     </div>
   );
 }

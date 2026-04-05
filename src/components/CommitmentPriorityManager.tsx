@@ -19,7 +19,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { Commitment } from '../types';
 import { GripVertical, X, Save, Loader2, AlertCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { fetchCommitments as fetchCommitmentsApi, updateCommitment } from '../api';
+import { fetchCommitments as fetchCommitmentsApi, reorderCommitments } from '../api';
 
 interface CommitmentPriorityManagerProps {
   onClose: () => void;
@@ -49,6 +49,24 @@ function SortableItem({ commitment, index }: SortableItemProps) {
     opacity: isDragging ? 0.5 : 1,
   };
 
+  const mesi = ['GENNAIO', 'FEBBRAIO', 'MARZO', 'APRILE', 'MAGGIO', 'GIUGNO', 'LUGLIO', 'AGOSTO', 'SETTEMBRE', 'OTTOBRE', 'NOVEMBRE', 'DICEMBRE'];
+  const parseNote = (note?: string) => {
+    if (!note) return { month: 'ALTRO', additionalNote: '' };
+    const parts = note.split(' - ');
+    if (parts.length > 1) {
+      const firstPart = parts[0].toUpperCase();
+      if (mesi.includes(firstPart)) {
+        return { month: firstPart, additionalNote: parts.slice(1).join(' - ') };
+      }
+    } else {
+      const noteUpper = note.toUpperCase();
+      if (mesi.includes(noteUpper)) {
+        return { month: noteUpper, additionalNote: '' };
+      }
+    }
+    return { month: 'ALTRO', additionalNote: note };
+  };
+
   return (
     <div
       ref={setNodeRef}
@@ -70,6 +88,10 @@ function SortableItem({ commitment, index }: SortableItemProps) {
           <span className="font-bold text-slate-900 truncate">{commitment.cliente}</span>
           <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-mono">
             {commitment.commessa}
+            {(() => {
+              const { additionalNote } = parseNote(commitment.note);
+              return additionalNote && <span className="text-emerald-600 ml-1 font-bold">N.B: {additionalNote}</span>;
+            })()}
           </span>
         </div>
         <div className="text-xs text-slate-500 truncate">
@@ -134,24 +156,27 @@ export default function CommitmentPriorityManager({ onClose, onUpdate }: Commitm
   const handleSave = async () => {
     setSaving(true);
     try {
-      for (let i = 0; i < commitments.length; i++) {
-        await updateCommitment(commitments[i].id, { priorita: i + 1 });
-      }
+      const orders = commitments.map((c, index) => ({
+        id: c.id,
+        priority: index + 1
+      }));
+
+      await reorderCommitments(orders);
 
       toast.success("Priorità aggiornate con successo!");
       onUpdate();
       onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      toast.error("Errore nel salvataggio");
+      toast.error(error.message || "Errore nel salvataggio");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-      <div className="bg-slate-50 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border border-slate-200">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center bg-slate-900/5 p-4 pt-10 animate-in fade-in duration-200">
+      <div className="bg-slate-50 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border border-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-300">
         {/* Header */}
         <div className="p-6 border-b border-slate-200 bg-white flex items-center justify-between">
           <div>

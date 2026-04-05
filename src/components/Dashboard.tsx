@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { LogOut, LayoutDashboard, Menu, Package, Activity, Users, History, BellRing, UploadCloud, Grid, ChevronDown, ChevronRight, Database } from 'lucide-react';
+import { LogOut, LayoutDashboard, Menu, Package, Activity, Users, History, BellRing, UploadCloud, Grid, ChevronDown, ChevronRight, Database, MonitorPlay, Scissors, RefreshCw } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
 import clsx from 'clsx';
 import ArticlesTable from './ArticlesTable';
@@ -9,12 +9,23 @@ import RegisterCommitment from './RegisterCommitment';
 import CommitmentsView from './CommitmentsView';
 import ClientsView from './ClientsView';
 import MovementsView from './MovementsView';
+import MovimentiCGiallaView from './MovimentiCGiallaView';
 import ImportDataView from './ImportDataView';
 import BackupView from './BackupView';
 import Produzione2026View from './Produzione2026View';
+import FaseTaglioView from './FaseTaglioView';
+import Macchina5000 from './Macchina5000';
+import TaglioLaser from './TaglioLaser';
+import CasseATView from './CasseATView';
+import MagazzinoAGRView from './MagazzinoAGRView';
+import StruttureAGMView from './StruttureAGMView';
+import MagSemiLavView from './MagSemiLavView';
+import BancaCostiLavorazioni from './BancaCostiLavorazioni';
 import ErrorReportChat from './ErrorReportChat';
+import SyncPopup from './SyncPopup';
 import { MessageSquare } from 'lucide-react';
-import { Article, Process, Commitment, AUTHORIZED_USERS } from '../types';
+import { Article, Process, Commitment, Client, AUTHORIZED_USERS, Macchina5000 as Macchina5000Type, TaglioLaser as TaglioLaserType, FaseTaglio } from '../types';
+import { apiCall } from '../api';
 import { getDisponibilita, getCategory } from '../utils';
 
 const checkAllarmi = (articoli: Article[], impegni: Commitment[]) => {
@@ -23,7 +34,7 @@ const checkAllarmi = (articoli: Article[], impegni: Commitment[]) => {
   articoli.forEach(a => {
     const tot = getDisponibilita(a, impegni);
 
-    if (tot < 10) {
+    if (tot < 0) {
       const famiglia = getCategory(a.nome, a.codice) || "Senza famiglia";
 
       if (!famiglie[famiglia]) {
@@ -41,22 +52,16 @@ const checkAllarmi = (articoli: Article[], impegni: Commitment[]) => {
     return null;
   }
 
-  const messaggio = famiglieInAllarme
-    .map(([famiglia, totale]) => {
-      return `• ${famiglia}: totale negativo ${totale}`;
-    })
-    .join("\n");
-
   return {
     type: "ALLARME_SCORTE",
-    message: `⚠️ Attenzione, ci sono famiglie con scorte negative:\n\n${messaggio}`,
+    message: `⚠️ Attenzione, ci sono articoli con scorte negative.`,
     actions: [
       {
-        label: "Visualizza articoli negativi",
+        label: "Visualizza",
         action: "VIEW_NEGATIVE_ITEMS"
       },
       {
-        label: "Visualizza più tardi",
+        label: "Chiudi",
         action: "DISMISS"
       }
     ]
@@ -64,21 +69,43 @@ const checkAllarmi = (articoli: Article[], impegni: Commitment[]) => {
 };
 
 const SHOW_ERROR_CHAT = true; // Feature toggle per la sezione "Segnala Errori"
-const CHAT_AUTHORIZED_USERS = ['LucaTurati', 'TahaJbala'];
+const CHAT_AUTHORIZED_USERS = ['LucaTurati', 'TahaJbala', 'TahaDev'];
 
 interface DashboardProps {
   username: string;
+  role: string;
   onLogout: () => void;
 }
 
 type OnlineUser = { username: string };
 
-export default function Dashboard({ username, onLogout }: DashboardProps) {
+export default function Dashboard({ username, role, onLogout }: DashboardProps) {
+  const isElena = username === 'ElenaTurati';
+  const isAndrea = username === 'Andrea';
+  const isRida = username === 'RidaTecnico';
+  const isOsvaldo = username === 'Osvaldo';
+  const isSpecialShortcutUser = [
+    'LucaTurati',
+    'RobertoBonalumi',
+    'TahaDev',
+    'AdeleTurati',
+    'SamantaLimonta',
+    'TahaJbala'
+  ].includes(username);
   const [articles, setArticles] = useState<Article[]>([]);
   const [processes, setProcesses] = useState<Process[]>([]);
   const [commitments, setCommitments] = useState<Commitment[]>([]);
+  const [macchina5000, setMacchina5000] = useState<Macchina5000Type[]>([]);
+  const [taglioLaser, setTaglioLaser] = useState<TaglioLaserType[]>([]);
+  const [faseTaglio, setFaseTaglio] = useState<FaseTaglio[]>([]);
+  const [faseSaldatura, setFaseSaldatura] = useState<FaseTaglio[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentView, setCurrentView] = useState<'dashboard' | 'produzione2026' | 'produzione2026spc' | 'impegni' | 'clienti' | 'movimenti' | 'import' | 'backup' | 'errorChat'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'produzione2026' | 'produzione2026spc' | 'impegni' | 'clienti' | 'movimenti' | 'movimentiCGialla' | 'import' | 'backup' | 'errorChat' | 'faseTaglio' | 'bancaCosti' | 'macchina5000' | 'taglioLaser' | 'casseAT' | 'magazzinoAGR' | 'magSemiLav' | 'struttureAGM'>(
+    isElena ? 'produzione2026' : 
+    isAndrea ? 'macchina5000' :
+    isOsvaldo ? 'taglioLaser' :
+    isRida ? 'faseTaglio' : 'dashboard'
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [productionFamilyFilter, setProductionFamilyFilter] = useState('Tutte');
   const [isProduzioneMenuExpanded, setIsProduzioneMenuExpanded] = useState(false);
@@ -86,14 +113,20 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
   const [isRetriMenuExpanded, setIsRetriMenuExpanded] = useState(false);
   const [isLateraliMenuExpanded, setIsLateraliMenuExpanded] = useState(false);
   const [isPiastreMenuExpanded, setIsPiastreMenuExpanded] = useState(false);
+  const [isMagazzinoMenuExpanded, setIsMagazzinoMenuExpanded] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'default'>('default');
   const [isAlarmDismissed, setIsAlarmDismissed] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [showSync, setShowSync] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   
   const isAuthorized = AUTHORIZED_USERS.includes(username);
-  const isChatAuthorized = CHAT_AUTHORIZED_USERS.includes(username);
+  const isChatAuthorized = CHAT_AUTHORIZED_USERS.includes(username) || role === 'developer';
+  const isTaglioVisible = (role === 'admin' || role === 'developer' || (role && role.toLowerCase().trim().includes('taglio')) || username === 'RidaTecnico' || isSpecialShortcutUser) && !isAndrea && !isOsvaldo;
+  console.log('DEBUG: username:', username, 'role:', role, 'isTaglioVisible:', isTaglioVisible, 'role type:', typeof role);
   
   const prevArticlesRef = useRef<Article[]>([]);
   const prevCommitmentsRef = useRef<Commitment[]>([]);
@@ -176,47 +209,58 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
     }
   };
 
-  const fetchData = async () => {
+  const fetchData = async (isManual = false) => {
+    if (isManual) {
+      setShowSync(true);
+      setSyncProgress(0);
+    }
+
     try {
-      const [articlesRes, processesRes, commitmentsRes] = await Promise.all([
-        fetch('/api/articles'),
-        fetch('/api/processes'),
-        fetch('/api/commitments')
-      ]);
+      // Helper to update progress
+      const updateProgress = async (p: number) => {
+        if (isManual) {
+          setSyncProgress(p);
+          await new Promise(r => setTimeout(r, 150));
+        }
+      };
+
+      await updateProgress(10);
+      const articlesData = await apiCall<Article[]>('/api/articles');
+      await updateProgress(25);
+      const processesData = await apiCall<Process[]>('/api/processes');
+      await updateProgress(40);
+      const commitmentsData = await apiCall<Commitment[]>('/api/commitments');
+      await updateProgress(60);
+      const macchina5000Data = await apiCall<Macchina5000Type[]>('/api/macchina-5000');
+      await updateProgress(75);
+      const taglioLaserData = await apiCall<TaglioLaserType[]>('/api/taglio-laser');
+      await updateProgress(90);
+      const faseTaglioData = await apiCall<FaseTaglio[]>('/api/fase-taglio');
+      const faseSaldaturaData = await apiCall<FaseTaglio[]>('/api/fase-saldatura');
+      await updateProgress(100);
       
-      if (!articlesRes.ok) {
-        const error = await articlesRes.text();
-        throw new Error(`Articles fetch failed: ${error}`);
+      if (!Array.isArray(articlesData) || !Array.isArray(processesData) || !Array.isArray(commitmentsData) || !Array.isArray(macchina5000Data) || !Array.isArray(taglioLaserData) || !Array.isArray(faseTaglioData) || !Array.isArray(faseSaldaturaData)) {
+        console.error('Data received is not in expected format', { articlesData, processesData, commitmentsData, macchina5000Data, taglioLaserData, faseTaglioData, faseSaldaturaData });
+        if (isManual) setShowSync(false);
+        return;
       }
-      if (!processesRes.ok) {
-        const error = await processesRes.text();
-        throw new Error(`Processes fetch failed: ${error}`);
-      }
-      if (!commitmentsRes.ok) {
-        const error = await commitmentsRes.text();
-        throw new Error(`Commitments fetch failed: ${error}`);
-      }
-      
-      const articlesData: Article[] = await articlesRes.json();
-      const processesData: Process[] = await processesRes.json();
-      const commitmentsData = await commitmentsRes.json();
       
       // Check for low availability
-      if (prevArticlesRef.current.length > 0) {
+      if ((prevArticlesRef.current || []).length > 0 && articlesData.length > 0) {
         const lowStockAlerts: { article: Article, disp: number, action: string }[] = [];
         
         articlesData.forEach(newArticle => {
-          const oldArticle = prevArticlesRef.current.find(a => a.id === newArticle.id);
+          const oldArticle = (prevArticlesRef.current || []).find(a => a.id === newArticle.id);
           if (oldArticle) {
-            const oldDisp = getDisponibilita(oldArticle, prevCommitmentsRef.current);
+            const oldDisp = getDisponibilita(oldArticle, prevCommitmentsRef.current || []);
             const newDisp = getDisponibilita(newArticle, commitmentsData);
             
-            // Se la disponibilità scende sotto i 10 pezzi
-            if (oldDisp >= 10 && newDisp < 10) {
+            // Se la disponibilità scende sotto 0 pezzi
+            if (oldDisp >= 0 && newDisp < 0) {
               const process = processesData.find(p => p.articolo_id === newArticle.id);
               
-              const isPiastra = newArticle.nome.toLowerCase().includes('piastra');
-              const deficit = 10 - newDisp; // Calcola quanti pezzi mancano per tornare alla scorta di sicurezza (10)
+              const isPiastra = (newArticle.nome || '').toLowerCase().includes('piastra');
+              const deficit = 0 - newDisp; // Calcola quanti pezzi mancano per tornare a 0
               const taglio = process?.taglio || 0;
               const piega = process?.piega || 0;
               
@@ -264,8 +308,8 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
       }
       
       // Check for new commitments
-      if (prevCommitmentsRef.current.length > 0 && commitmentsData.length > prevCommitmentsRef.current.length) {
-        const newCommitmentsCount = commitmentsData.length - prevCommitmentsRef.current.length;
+      if ((prevCommitmentsRef.current || []).length > 0 && commitmentsData.length > (prevCommitmentsRef.current || []).length) {
+        const newCommitmentsCount = commitmentsData.length - (prevCommitmentsRef.current || []).length;
         const msg = `${newCommitmentsCount} nuov${newCommitmentsCount === 1 ? 'o impegno registrato' : 'i impegni registrati'}!`;
         
         toast.success(msg, {
@@ -281,14 +325,24 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
         }
       }
       
+      if (isManual) {
+        setTimeout(() => setShowSync(false), 1000);
+      }
+
       prevArticlesRef.current = articlesData;
       prevCommitmentsRef.current = commitmentsData;
       
       setArticles(articlesData);
       setProcesses(processesData);
       setCommitments(commitmentsData);
+      setMacchina5000(macchina5000Data);
+      setTaglioLaser(taglioLaserData);
+      setFaseTaglio(faseTaglioData);
+      setFaseSaldatura(faseSaldaturaData);
+      setLastSyncTime(new Date().toLocaleTimeString());
     } catch (error) {
       console.error("Error fetching data:", error);
+      if (isManual) setShowSync(false);
     } finally {
       setLoading(false);
     }
@@ -300,7 +354,7 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
     }
     
     fetchData();
-    const interval = setInterval(fetchData, 5000);
+    const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -318,6 +372,11 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
       case 'movimenti': return 'Cronologia Movimenti';
       case 'import': return 'Importazione Dati';
       case 'backup': return 'Backup e Ripristino';
+      case 'taglioLaser': return 'Taglio Laser';
+      case 'casseAT': return 'Casse AT';
+      case 'magazzinoAGR': return 'Magazzino AGR';
+      case 'struttureAGM': return 'Strutture AGM';
+      case 'magSemiLav': return 'Mag. Semi Lav. D\'acquisto';
       default: return '';
     }
   };
@@ -328,8 +387,15 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
       <div className="absolute inset-0 opacity-[0.03] bg-[radial-gradient(#000000_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none"></div>
       
       <Toaster position="top-right" toastOptions={{ className: 'font-medium rounded-xl shadow-lg' }} />
+      
+      <SyncPopup 
+        show={showSync} 
+        progress={syncProgress} 
+        lastUpdate={lastSyncTime} 
+      />
+
       {/* Header */}
-      <header className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-900 text-white shadow-lg relative z-50 border-b border-blue-800/50">
+      <header className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-900 text-white shadow-lg sticky top-0 z-50 border-b border-blue-800/50">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
           <div className="flex items-center gap-5">
             <button 
@@ -355,9 +421,195 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
                 </p>
               </div>
             </div>
+
+            {/* Shortcuts for most used sections */}
+            {isSpecialShortcutUser ? (
+              <div className="hidden md:flex items-center gap-2 ml-4 lg:ml-8 border-l border-white/10 pl-4 lg:pl-8">
+                {['LucaTurati', 'RobertoBonalumi', 'TahaDev', 'AdeleTurati'].includes(username) && (
+                  <button 
+                    onClick={() => setCurrentView('dashboard')} 
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                      currentView === 'dashboard' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                    )}
+                  >
+                    <Activity className="h-3.5 w-3.5" />
+                    <span>PANORAMICA</span>
+                  </button>
+                )}
+                <button 
+                  onClick={() => setCurrentView('produzione2026')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'produzione2026' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <Grid className="h-3.5 w-3.5" />
+                  <span>PRODUZIONE 2026</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('impegni')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'impegni' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <Package className="h-3.5 w-3.5" />
+                  <span>TABELLA IMPEGNI</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('movimenti')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'movimenti' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span>MOVIMENTI</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('movimentiCGialla')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'movimentiCGialla' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span>MOVIMENTI C. GIALLA</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('faseTaglio')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'faseTaglio' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <Scissors className="h-3.5 w-3.5" />
+                  <span>FASE TAGLIO</span>
+                </button>
+              </div>
+            ) : (isAndrea || isRida || isOsvaldo || role === 'developer') ? (
+              <div className="hidden md:flex items-center gap-2 ml-4 lg:ml-8 border-l border-white/10 pl-4 lg:pl-8">
+                {(!isAndrea && !isOsvaldo) && (
+                  <button 
+                    onClick={() => setCurrentView('produzione2026')} 
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                      currentView === 'produzione2026' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                    )}
+                  >
+                    <Grid className="h-3.5 w-3.5" />
+                    <span>PRODUZIONE 2026</span>
+                  </button>
+                )}
+                {(!isOsvaldo) && (
+                  <button 
+                    onClick={() => setCurrentView('macchina5000')} 
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                      currentView === 'macchina5000' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                    )}
+                  >
+                    <MonitorPlay className="h-3.5 w-3.5" />
+                    <span>MACCHINA 5000</span>
+                  </button>
+                )}
+                {!isAndrea && (
+                  <button 
+                    onClick={() => setCurrentView('taglioLaser')} 
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                      currentView === 'taglioLaser' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                    )}
+                  >
+                    <MonitorPlay className="h-3.5 w-3.5" />
+                    <span>TAGLIO LASER</span>
+                  </button>
+                )}
+                <button 
+                  onClick={() => setCurrentView('faseTaglio')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'faseTaglio' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <Scissors className="h-3.5 w-3.5" />
+                  <span>FASE TAGLIO</span>
+                </button>
+              </div>
+            ) : role !== 'taglio_only' && !isElena && (
+              <div className="hidden md:flex items-center gap-2 ml-4 lg:ml-8 border-l border-white/10 pl-4 lg:pl-8">
+                <button 
+                  onClick={() => setCurrentView('dashboard')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'dashboard' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <Activity className="h-3.5 w-3.5" />
+                  <span>PANORAMICA</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('produzione2026')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'produzione2026' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <Grid className="h-3.5 w-3.5" />
+                  <span>PRODUZIONE 2026</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('impegni')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'impegni' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <Package className="h-3.5 w-3.5" />
+                  <span>TABELLA IMPEGNI</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('movimenti')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'movimenti' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span>MOVIMENTI</span>
+                </button>
+                <button 
+                  onClick={() => setCurrentView('movimentiCGialla')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'movimentiCGialla' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span>MOVIMENTI C. GIALLA</span>
+                </button>
+              </div>
+            )}
           </div>
           
           <div className="flex items-center gap-4 sm:gap-6">
+            <button
+              onClick={() => fetchData(true)}
+              className="hidden md:flex items-center gap-2 px-5 py-2.5 bg-blue-600/20 hover:bg-blue-600/40 transition-all rounded-xl border border-blue-500/30 text-blue-100 hover:text-white shadow-lg backdrop-blur-md active:scale-95 group"
+              title="Sincronizzazione manuale dei dati"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-700'}`} />
+              <span className="text-[10px] font-black uppercase tracking-widest">Sincronizza</span>
+            </button>
+
+            <button
+              onClick={() => fetchData(true)}
+              className="md:hidden flex items-center justify-center h-10 w-10 bg-blue-600/20 hover:bg-blue-600/40 transition-all rounded-full border border-blue-500/30 text-blue-100 hover:text-white shadow-lg backdrop-blur-md active:scale-95"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+
             <div className="relative group flex items-center gap-2 cursor-pointer">
               <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-full border border-white/10 hover:bg-white/10 transition-all backdrop-blur-md">
                 <div className="relative flex h-2.5 w-2.5">
@@ -413,7 +665,7 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
                 <span className="hidden sm:inline font-medium">Attiva Notifiche</span>
               </button>
             )}
-            <div className="flex items-center gap-3 pl-2 sm:pl-4 sm:border-l border-white/10">
+            <div className="flex items-center gap-3 pl-2 sm:pl-4 sm:border-l border-white/10 header-right-section">
               <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center border-2 border-white/20 shadow-inner">
                 <span className="text-sm font-bold text-white">{username.charAt(0).toUpperCase()}</span>
               </div>
@@ -434,35 +686,42 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
 
         {/* Dropdown Menu */}
         {menuOpen && (
-          <div className="absolute top-20 left-4 w-72 bg-slate-900/95 backdrop-blur-xl shadow-2xl border border-slate-700/50 py-3 rounded-2xl z-50 overflow-hidden">
-            <button
-              onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }}
-              className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'dashboard' ? 'bg-blue-500/10 text-blue-400 border-l-4 border-blue-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-            >
-              <Activity className="h-5 w-5" />
-              <span>Panoramica Produzione</span>
-            </button>
-            <div className="flex flex-col">
-              <div className="flex items-center">
-                <button
-                  onClick={() => { setCurrentView('produzione2026'); setMenuOpen(false); }}
-                  className={`flex-1 text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'produzione2026' ? 'bg-cyan-500/10 text-cyan-400 border-l-4 border-cyan-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-                >
-                  <Grid className="h-5 w-5" />
-                  <span>Produzione 2026</span>
-                </button>
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsProduzioneMenuExpanded(!isProduzioneMenuExpanded);
-                  }}
-                  className="px-4 py-3.5 text-slate-400 hover:text-white hover:bg-white/5 transition-colors border-l border-slate-700/50"
-                >
-                  {isProduzioneMenuExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                </button>
-              </div>
+          <div className="absolute top-20 left-4 w-72 bg-slate-900/95 backdrop-blur-xl shadow-2xl border border-slate-700/50 py-3 rounded-2xl z-50 overflow-y-auto max-h-[calc(100vh-120px)] custom-scrollbar">
+            {(role !== 'taglio_only' || isOsvaldo || isRida) && !isElena && (
+              <>
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'dashboard' ? 'bg-blue-500/10 text-blue-400 border-l-4 border-blue-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Activity className="h-5 w-5" />
+                    <span>Panoramica Produzione</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <div className="flex flex-col">
+                    <div className="flex items-center">
+                      <button
+                        onClick={() => { setCurrentView('produzione2026'); setMenuOpen(false); }}
+                        className={`flex-1 text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'produzione2026' ? 'bg-cyan-500/10 text-cyan-400 border-l-4 border-cyan-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                      >
+                        <Grid className="h-5 w-5" />
+                        <span>Produzione 2026</span>
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsProduzioneMenuExpanded(!isProduzioneMenuExpanded);
+                        }}
+                        className="px-4 py-3.5 text-slate-400 hover:text-white hover:bg-white/5 transition-colors border-l border-slate-700/50"
+                      >
+                        {isProduzioneMenuExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               
-              {isProduzioneMenuExpanded && (
+              {isProduzioneMenuExpanded && ((!isAndrea && !isOsvaldo && !isRida) || role === 'developer') && (
                 <div className="bg-slate-900/50 py-1 border-l-4 border-transparent">
                   <button
                     onClick={() => { 
@@ -476,7 +735,7 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
                   </button>
                   {[
                     'Porte', 'Retri', 'Laterali', 'Tetti', 'Piastre', 'Basi&Tetti', 
-                    'Strutture Agr', 'AGS', 'AGC', 'AGLM', 'AGLC', 'Cristalli', 'INVOLUCRI AT'
+                    'Strutture Agr', 'AGS', 'AGC', 'AGLM', 'AGLC', 'Cristalli'
                   ].map(family => {
                     const isFamilyActive = productionFamilyFilter === family || 
                       (family === 'Porte' && ['Porte Standard', 'Porte IB/CB', 'Porte PX/PV', 'Porte INT/LAT/180°'].includes(productionFamilyFilter)) ||
@@ -590,44 +849,125 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
                   )})}
                 </div>
               )}
-            </div>
-            <button
-              onClick={() => { setCurrentView('impegni'); setMenuOpen(false); }}
-              className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'impegni' ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-            >
-              <Package className="h-5 w-5" />
-              <span>Tabella Impegni</span>
-            </button>
-            <button
-              onClick={() => { setCurrentView('clienti'); setMenuOpen(false); }}
-              className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'clienti' ? 'bg-sky-500/10 text-sky-400 border-l-4 border-sky-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-            >
-              <Users className="h-5 w-5" />
-              <span>Clienti</span>
-            </button>
-            <button
-              onClick={() => { setCurrentView('movimenti'); setMenuOpen(false); }}
-              className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'movimenti' ? 'bg-orange-500/10 text-orange-400 border-l-4 border-orange-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-            >
-              <History className="h-5 w-5" />
-              <span>Movimenti</span>
-            </button>
+            {(isElena || role === 'developer') && (
+                <button
+                  onClick={() => { setCurrentView('bancaCosti'); setMenuOpen(false); }}
+                  className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'bancaCosti' ? 'bg-emerald-500/10 text-emerald-400 border-l-4 border-emerald-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                >
+                  <Database className="h-5 w-5" />
+                  <span>Banca Costi Lavorazioni</span>
+                </button>
+            )}
+            {((role !== 'taglio_only' && !isElena && !isRida) || (role === 'admin' && !isElena) || role === 'developer') && (
+              <>
+                {(!isAndrea && !isRida && !isOsvaldo) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('casseAT'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'casseAT' ? 'bg-amber-500/10 text-amber-400 border-l-4 border-amber-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Package className="h-5 w-5" />
+                    <span>Casse AT</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isRida && !isOsvaldo) || role === 'developer' ? (
+                  <div className="flex flex-col">
+                    <div className="flex items-center">
+                      <button
+                        onClick={() => { setCurrentView('magazzinoAGR'); setMenuOpen(false); }}
+                        className={`flex-1 text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'magazzinoAGR' ? 'bg-blue-500/10 text-blue-400 border-l-4 border-blue-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                      >
+                        <Package className="h-5 w-5" />
+                        <span>Magazzino AGR</span>
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMagazzinoMenuExpanded(!isMagazzinoMenuExpanded);
+                        }}
+                        className="px-4 py-3.5 text-slate-400 hover:text-white hover:bg-white/5 transition-colors border-l border-slate-700/50"
+                      >
+                        {isMagazzinoMenuExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    {isMagazzinoMenuExpanded && (
+                      <div className="bg-slate-900/50 py-1 border-l-4 border-transparent">
+                        <button
+                          onClick={() => { setCurrentView('magSemiLav'); setMenuOpen(false); }}
+                          className={`w-full text-left pl-14 pr-6 py-2 text-sm transition-colors ${currentView === 'magSemiLav' ? 'text-blue-400 font-bold' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          Mag. Semi Lav. D'acquisto
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('struttureAGM'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'struttureAGM' ? 'bg-teal-500/10 text-teal-400 border-l-4 border-teal-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Package className="h-5 w-5" />
+                    <span>Strutture AGM</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('impegni'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'impegni' ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Package className="h-5 w-5" />
+                    <span>Tabella Impegni</span>
+                  </button>
+                ) : null}
+                {(!isElena && !isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('clienti'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'clienti' ? 'bg-sky-500/10 text-sky-400 border-l-4 border-sky-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Users className="h-5 w-5" />
+                    <span>Clienti</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('movimenti'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'movimenti' ? 'bg-orange-500/10 text-orange-400 border-l-4 border-orange-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <History className="h-5 w-5" />
+                    <span>Movimenti</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('movimentiCGialla'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'movimentiCGialla' ? 'bg-yellow-500/10 text-yellow-400 border-l-4 border-yellow-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <History className="h-5 w-5" />
+                    <span>Movimenti C. Gialla</span>
+                  </button>
+                ) : null}
+              </>
+            )}
             <div className="border-t border-slate-700/50 my-2 mx-4"></div>
-            <button
-              onClick={() => { setCurrentView('import'); setMenuOpen(false); }}
-              className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'import' ? 'bg-purple-500/10 text-purple-400 border-l-4 border-purple-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-            >
-              <UploadCloud className="h-5 w-5" />
-              <span>Importa Dati</span>
-            </button>
-            <button
-              onClick={() => { setCurrentView('backup'); setMenuOpen(false); }}
-              className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'backup' ? 'bg-teal-500/10 text-teal-400 border-l-4 border-teal-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-            >
-              <Database className="h-5 w-5" />
-              <span>Backup e Ripristino</span>
-            </button>
-            {SHOW_ERROR_CHAT && isChatAuthorized && (
+            {(!isElena && !isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+              <button
+                onClick={() => { setCurrentView('import'); setMenuOpen(false); }}
+                className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'import' ? 'bg-purple-500/10 text-purple-400 border-l-4 border-purple-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+              >
+                <UploadCloud className="h-5 w-5" />
+                <span>Importa Dati</span>
+              </button>
+            ) : null}
+            {(!isElena && !isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+              <button
+                onClick={() => { setCurrentView('backup'); setMenuOpen(false); }}
+                className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'backup' ? 'bg-teal-500/10 text-teal-400 border-l-4 border-teal-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+              >
+                <Database className="h-5 w-5" />
+                <span>Backup e Ripristino</span>
+              </button>
+            ) : null}
+            {SHOW_ERROR_CHAT && isChatAuthorized && (!isElena && !isAndrea && !isOsvaldo && !isRida || role === 'developer') && (
               <button
                 onClick={() => { setCurrentView('errorChat'); setMenuOpen(false); }}
                 className={clsx(
@@ -648,9 +988,51 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
                 )}
               </button>
             )}
-          </div>
+            {!isElena && isTaglioVisible && (
+              <button
+                onClick={() => { setCurrentView('faseTaglio'); setMenuOpen(false); }}
+                className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'faseTaglio' ? 'bg-rose-500/10 text-rose-400 border-l-4 border-rose-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+              >
+                <Activity className="h-5 w-5" />
+                <span>Fase Taglio</span>
+              </button>
+            )}
+            {!isElena && (role === 'admin' || role === 'developer' || isRida || isAndrea || isOsvaldo) && (
+              <>
+                {!isOsvaldo && (
+                  <button
+                    onClick={() => { setCurrentView('macchina5000'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'macchina5000' ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Activity className="h-5 w-5" />
+                    <span>Macchina 5000</span>
+                  </button>
+                )}
+                {(role === 'admin' || role === 'developer' || isRida || isOsvaldo || username === 'LucaTurati' || username === 'RobertoBonalumi' || username === 'AdeleTurati') && !isAndrea && (
+                  <button
+                    onClick={() => { setCurrentView('taglioLaser'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'taglioLaser' ? 'bg-purple-500/10 text-purple-400 border-l-4 border-purple-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Activity className="h-5 w-5" />
+                    <span>Taglio Laser</span>
+                  </button>
+                )}
+              </>
+            )}
+            {!isElena && !isAndrea && !isOsvaldo && !isRida && (
+              <button
+                onClick={() => { setCurrentView('dashboard'); setMenuOpen(false); }}
+                className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'dashboard' ? 'bg-blue-500/10 text-blue-400 border-l-4 border-blue-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+              >
+                <Activity className="h-5 w-5" />
+                <span>Registra Movimenti</span>
+              </button>
+            )}
+          </>
         )}
-      </header>
+      </div>
+    )}
+  </header>
 
       {/* Main Content */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-8 relative z-10" onClick={() => menuOpen && setMenuOpen(false)}>
@@ -665,32 +1047,28 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
               const allarme = checkAllarmi(articles, commitments);
               if (allarme && !isAlarmDismissed) {
                 return (
-                  <div className="bg-white border-l-4 border-red-500 p-5 rounded-2xl shadow-[0_4px_20px_-4px_rgba(239,68,68,0.15)] flex flex-col gap-3 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/5 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
-                    <div className="flex items-start gap-4 relative z-10">
-                      <div className="bg-red-50 p-3 rounded-xl mt-0.5 border border-red-100">
-                        <BellRing className="h-6 w-6 text-red-500" />
+                  <div className="bg-white border-l-4 border-red-500 p-3 rounded-xl shadow-sm flex items-center justify-between gap-4 relative overflow-hidden">
+                    <div className="flex items-center gap-3 relative z-10">
+                      <div className="bg-red-50 p-2 rounded-lg border border-red-100">
+                        <BellRing className="h-4 w-4 text-red-500" />
                       </div>
-                      <div className="flex-1">
-                        <div className="text-slate-800 font-semibold text-lg mb-1">Attenzione Richiesta</div>
-                        <div className="text-slate-600 font-medium whitespace-pre-wrap text-sm leading-relaxed">
-                          {allarme.message}
-                        </div>
+                      <div className="text-slate-800 font-bold text-sm">
+                        {allarme.message}
                       </div>
                     </div>
-                    <div className="flex gap-3 mt-3 ml-16 relative z-10">
+                    <div className="flex gap-2 relative z-10">
                       <button 
                         onClick={() => {
                           setProductionFamilyFilter('Tutte');
                           setCurrentView('produzione2026');
                         }}
-                        className="bg-red-500 hover:bg-red-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-red-500/20 hover:shadow-lg hover:shadow-red-500/30"
+                        className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all shadow-sm"
                       >
                         {allarme.actions[0].label}
                       </button>
                       <button 
                         onClick={() => setIsAlarmDismissed(true)}
-                        className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm hover:shadow"
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all"
                       >
                         {allarme.actions[1].label}
                       </button>
@@ -702,38 +1080,79 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
             })()}
 
             {/* Top Section: Operational Tools */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className={`grid grid-cols-1 ${role === 'taglio_only' ? '' : 'lg:grid-cols-2'} gap-8 mb-8`}>
               <div className="bg-white rounded-2xl shadow-[0_2px_15px_-3px_rgba(6,81,237,0.08)] border border-slate-200/60 overflow-hidden backdrop-blur-sm transition-all hover:shadow-[0_8px_25px_-5px_rgba(6,81,237,0.12)]">
-                <ProductionMovement articles={articles} onUpdate={handleArticleUpdate} username={username} />
+                <ProductionMovement articles={articles} onUpdate={handleArticleUpdate} username={username} role={role} />
               </div>
-              <div className="bg-white rounded-2xl shadow-[0_2px_15px_-3px_rgba(6,81,237,0.08)] border border-slate-200/60 overflow-hidden backdrop-blur-sm transition-all hover:shadow-[0_8px_25px_-5px_rgba(6,81,237,0.12)]">
-                <RegisterCommitment articles={articles} onUpdate={handleArticleUpdate} username={username} />
-              </div>
+              {role !== 'taglio_only' && (
+                <div className="bg-white rounded-2xl shadow-[0_2px_15px_-3px_rgba(6,81,237,0.08)] border border-slate-200/60 overflow-hidden backdrop-blur-sm transition-all hover:shadow-[0_8px_25px_-5px_rgba(6,81,237,0.12)]">
+                  <RegisterCommitment articles={articles} onUpdate={handleArticleUpdate} username={username} />
+                </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start" style={{ height: 'calc(100vh - 450px)', minHeight: '500px' }}>
-              {/* Left Column: Articles (7 columns) */}
-              <div className="lg:col-span-7 bg-white rounded-2xl shadow-[0_2px_15px_-3px_rgba(6,81,237,0.08)] border border-slate-200/60 overflow-hidden flex flex-col h-full backdrop-blur-sm">
+            <div className={`grid grid-cols-1 ${role === 'taglio_only' ? '' : 'lg:grid-cols-12'} gap-8 items-start`}>
+              {/* Left Column: Articles */}
+              <div className={`${role === 'taglio_only' ? '' : 'lg:col-span-7'} bg-white rounded-2xl shadow-[0_2px_15px_-3px_rgba(6,81,237,0.08)] border border-slate-200/60 overflow-hidden flex flex-col backdrop-blur-sm`} style={{ height: '600px' }}>
                 <ArticlesTable articles={articles} commitments={commitments} processes={processes} onUpdate={handleArticleUpdate} />
               </div>
 
-              {/* Right Column: Commitments (5 columns) */}
-              <div className="lg:col-span-5 bg-white rounded-2xl shadow-[0_2px_15px_-3px_rgba(6,81,237,0.08)] border border-slate-200/60 overflow-hidden flex flex-col h-full backdrop-blur-sm">
-                <CommitmentsTable articles={articles} onUpdate={handleArticleUpdate} username={username} />
-              </div>
+              {/* Right Column: Commitments */}
+              {role !== 'taglio_only' && (
+                <div className="lg:col-span-5 bg-white rounded-2xl shadow-[0_2px_15px_-3px_rgba(6,81,237,0.08)] border border-slate-200/60 overflow-hidden flex flex-col backdrop-blur-sm" style={{ height: '600px' }}>
+                  <CommitmentsTable articles={articles} commitments={commitments} onUpdate={handleArticleUpdate} username={username} role={role} />
+                </div>
+              )}
             </div>
           </>
-        ) : currentView === 'produzione2026' ? (
+          ) : currentView === 'produzione2026' ? (
           <Produzione2026View 
             articles={articles} 
             processes={processes} 
             commitments={commitments} 
+            macchina5000={macchina5000}
+            taglioLaser={taglioLaser}
+            faseTaglio={faseTaglio}
+            faseSaldatura={faseSaldatura}
             onUpdate={handleArticleUpdate}
             categoryFilter={productionFamilyFilter}
             setCategoryFilter={setProductionFamilyFilter}
+            username={username}
+            role={role}
           />
+        ) : currentView === 'casseAT' ? (
+          <CasseATView username={username} />
+        ) : currentView === 'magazzinoAGR' ? (
+          <MagazzinoAGRView 
+            articles={articles} 
+            processes={processes} 
+            commitments={commitments} 
+            macchina5000={macchina5000}
+            taglioLaser={taglioLaser}
+            faseTaglio={faseTaglio}
+            onUpdate={handleArticleUpdate}
+            username={username}
+            role={role}
+          />
+        ) : currentView === 'struttureAGM' ? (
+          <StruttureAGMView 
+            articles={articles} 
+            processes={processes} 
+            commitments={commitments} 
+            onUpdate={handleArticleUpdate}
+          />
+        ) : currentView === 'magSemiLav' ? (
+          <MagSemiLavView />
+        ) : currentView === 'faseTaglio' ? (
+          <FaseTaglioView articles={articles} username={username} onUpdate={handleArticleUpdate} />
+        ) : currentView === 'macchina5000' && !isOsvaldo ? (
+          <Macchina5000 articles={articles} username={username} role={role} onUpdate={handleArticleUpdate} />
+        ) : currentView === 'taglioLaser' && !isAndrea ? (
+          <TaglioLaser articles={articles} username={username} role={role} onUpdate={handleArticleUpdate} />
+        ) : currentView === 'bancaCosti' && isElena ? (
+          <BancaCostiLavorazioni />
         ) : currentView === 'impegni' ? (
-          <CommitmentsView onUpdate={handleArticleUpdate} username={username} />
+          <CommitmentsView onUpdate={handleArticleUpdate} username={username} articles={articles} commitments={commitments} />
         ) : currentView === 'clienti' ? (
           <ClientsView username={username} isAuthorized={isAuthorized} />
         ) : currentView === 'import' ? (
@@ -742,6 +1161,8 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
           <BackupView />
         ) : currentView === 'errorChat' && SHOW_ERROR_CHAT && isChatAuthorized ? (
           <ErrorReportChat username={username} socket={socket} />
+        ) : currentView === 'movimentiCGialla' ? (
+          <MovimentiCGiallaView />
         ) : (
           <MovementsView />
         )}
@@ -749,7 +1170,7 @@ export default function Dashboard({ username, onLogout }: DashboardProps) {
 
       {/* Footer */}
       <footer className="py-5 text-center text-sm text-slate-400 border-t border-slate-200/60 mt-auto bg-white/50 backdrop-blur-sm font-medium relative z-10">
-        &copy; {new Date().getFullYear()} Auger S.r.l. - Sistema Gestionale Produzione
+        &copy; {new Date().getFullYear()} Auger S.r.l. - Dashboard Auger
       </footer>
     </div>
   );

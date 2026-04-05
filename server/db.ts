@@ -69,6 +69,8 @@ db.exec(`
     operatore TEXT,
     cliente TEXT,
     commessa TEXT,
+    quantita_lanciata INTEGER,
+    tempo INTEGER,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(articolo_id) REFERENCES articles(id) ON DELETE CASCADE
   );
@@ -88,17 +90,352 @@ db.exec(`
     text TEXT NOT NULL,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS macchina_5000 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    data TEXT NOT NULL,
+    articolo TEXT NOT NULL,
+    quantita INTEGER NOT NULL,
+    preparazione INTEGER DEFAULT 0,
+    inizio TEXT,
+    inizio2 TEXT,
+    pausa TEXT,
+    fine TEXT,
+    totale_tempo INTEGER,
+    odl TEXT,
+    stato TEXT DEFAULT 'da tagliare',
+    operatore TEXT,
+    cliente TEXT,
+    commessa TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS taglio_laser (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    data TEXT NOT NULL,
+    articolo TEXT NOT NULL,
+    quantita INTEGER NOT NULL,
+    preparazione INTEGER DEFAULT 0,
+    inizio TEXT,
+    inizio2 TEXT,
+    pausa TEXT,
+    fine TEXT,
+    totale_tempo INTEGER,
+    odl TEXT,
+    stato TEXT DEFAULT 'da tagliare',
+    operatore TEXT,
+    cliente TEXT,
+    commessa TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS fase_taglio (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lavorazione_per TEXT,
+    articolo TEXT,
+    quantita INTEGER,
+    data TEXT,
+    odl TEXT,
+    commessa TEXT,
+    fatto INTEGER DEFAULT 0,
+    stampato INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS fase_saldatura (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lavorazione_per TEXT,
+    articolo TEXT,
+    quantita INTEGER,
+    data TEXT,
+    odl TEXT,
+    commessa TEXT,
+    fatto INTEGER DEFAULT 0,
+    stampato INTEGER DEFAULT 0,
+    macchina TEXT DEFAULT 'Reparto Saldatura',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS archivio_stampe (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lavorazione_per TEXT,
+    articolo TEXT,
+    quantita INTEGER,
+    data TEXT,
+    odl TEXT,
+    commessa TEXT,
+    macchina TEXT,
+    timestamp_stampa DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS programmi_eseguiti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lavorazione_per TEXT,
+    articolo TEXT,
+    quantita INTEGER,
+    data TEXT,
+    odl TEXT,
+    commessa TEXT,
+    timestamp_esecuzione DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS movimenti_c_gialla (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    data_reg DATETIME DEFAULT CURRENT_TIMESTAMP,
+    articolo_spc TEXT NOT NULL,
+    fase TEXT NOT NULL,
+    quantita INTEGER NOT NULL,
+    cliente_commessa TEXT,
+    operatore TEXT,
+    tempo_totale INTEGER,
+    quantita_lanciata INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS piastre_at (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    articolo TEXT,
+    codice TEXT,
+    tag INTEGER DEFAULT 0,
+    gre INTEGER DEFAULT 0,
+    imp INTEGER DEFAULT 0,
+    tot INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS porte_at (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    articolo TEXT,
+    codice TEXT,
+    tag INTEGER DEFAULT 0,
+    gre INTEGER DEFAULT 0,
+    vern INTEGER DEFAULT 0,
+    imp INTEGER DEFAULT 0,
+    tot INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS involucro_at (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    articolo TEXT,
+    codice TEXT,
+    tag INTEGER DEFAULT 0,
+    gre INTEGER DEFAULT 0,
+    sald INTEGER DEFAULT 0,
+    vern INTEGER DEFAULT 0,
+    mag INTEGER DEFAULT 0,
+    imp INTEGER DEFAULT 0,
+    tot INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS casse_complete_at (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    articolo TEXT NOT NULL UNIQUE,
+    quantita INTEGER DEFAULT 0,
+    impegni INTEGER DEFAULT 0,
+    totale INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  DROP TABLE IF EXISTS traverse_inventory;
+  
+  CREATE TABLE IF NOT EXISTS traverse_inventory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo TEXT NOT NULL,
+    misura INTEGER NOT NULL,
+    quantita INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tipo, misura)
+  );
+
+  CREATE TABLE IF NOT EXISTS agr_requirements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agr_codice TEXT NOT NULL UNIQUE,
+    forata_misura INTEGER NOT NULL,
+    cieca_misura INTEGER NOT NULL,
+    tetto1_misura INTEGER NOT NULL,
+    tetto2_misura INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
-// Migration: Ensure all articles have a process record
+// Seed traverse_inventory
 try {
-  db.exec(`
-    INSERT INTO processes (articolo_id)
-    SELECT id FROM articles
-    WHERE id NOT IN (SELECT articolo_id FROM processes);
-  `);
+  const traverseData = [
+    { tipo: 'forata', misure: [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800] },
+    { tipo: 'cieca', misure: [400, 500, 600, 800, 1000] },
+    { tipo: 'tetto1', misure: [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800] },
+    { tipo: 'tetto2', misure: [400, 500, 600, 800, 1000] }
+  ];
+
+  const insert = db.prepare('INSERT OR IGNORE INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, 5000)');
+  for (const item of traverseData) {
+    for (const misura of item.misure) {
+      insert.run(item.tipo, misura);
+    }
+  }
 } catch (e) {
-  // This might fail if processes table is not ready, but it's handled
+  console.error('Error seeding traverse_inventory:', e);
+}
+
+// Update existing records to 5000
+try {
+  db.prepare('UPDATE traverse_inventory SET quantita = 5000').run();
+} catch (e) {
+  console.error('Error updating traverse_inventory quantities:', e);
+}
+
+try {
+  db.exec('ALTER TABLE fase_taglio ADD COLUMN odl TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE fase_taglio ADD COLUMN fatto INTEGER DEFAULT 0;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE fase_taglio ADD COLUMN stampato INTEGER DEFAULT 0;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE macchina_5000 ADD COLUMN cliente TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE macchina_5000 ADD COLUMN commessa TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE taglio_laser ADD COLUMN cliente TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE taglio_laser ADD COLUMN commessa TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE macchina_5000 ADD COLUMN pausa TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE macchina_5000 ADD COLUMN inizio2 TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE taglio_laser ADD COLUMN pausa TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE taglio_laser ADD COLUMN inizio2 TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE fase_taglio ADD COLUMN commessa TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE fase_taglio ADD COLUMN macchina TEXT DEFAULT "Macchina 5000";');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE archivio_stampe ADD COLUMN macchina TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE archivio_stampe ADD COLUMN odl TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE archivio_stampe ADD COLUMN commessa TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE programmi_eseguiti ADD COLUMN odl TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE programmi_eseguiti ADD COLUMN commessa TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE piastre_at ADD COLUMN imp INTEGER DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE porte_at ADD COLUMN imp INTEGER DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE involucro_at ADD COLUMN imp INTEGER DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE piastre_at ADD COLUMN codice TEXT;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE porte_at ADD COLUMN articolo TEXT;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE porte_at ADD COLUMN codice TEXT;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE involucro_at ADD COLUMN articolo TEXT;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE involucro_at ADD COLUMN codice TEXT;');
+} catch (e) {}
+
+// Seed agr_requirements
+try {
+  const seedRequirements = [
+    { agr_codice: 'AGR0304', forata: 300, cieca: 400, tetto1: 300, tetto2: 400 },
+    { agr_codice: 'AGR0305', forata: 300, cieca: 400, tetto1: 300, tetto2: 400 },
+    { agr_codice: 'AGR0306', forata: 300, cieca: 400, tetto1: 300, tetto2: 400 },
+    { agr_codice: 'AGR0404', forata: 400, cieca: 400, tetto1: 400, tetto2: 400 },
+    { agr_codice: 'AGR0405', forata: 400, cieca: 500, tetto1: 400, tetto2: 500 },
+    { agr_codice: 'AGR0406', forata: 400, cieca: 600, tetto1: 400, tetto2: 600 },
+    { agr_codice: 'AGR0408', forata: 400, cieca: 800, tetto1: 400, tetto2: 800 },
+    { agr_codice: 'AGR0410', forata: 400, cieca: 1000, tetto1: 400, tetto2: 1000 },
+    { agr_codice: 'AGR0604', forata: 600, cieca: 400, tetto1: 600, tetto2: 400 },
+    { agr_codice: 'AGR0605', forata: 600, cieca: 500, tetto1: 600, tetto2: 500 },
+    { agr_codice: 'AGR0606', forata: 600, cieca: 600, tetto1: 600, tetto2: 600 },
+    { agr_codice: 'AGR0608', forata: 600, cieca: 800, tetto1: 600, tetto2: 800 },
+    { agr_codice: 'AGR0610', forata: 600, cieca: 1000, tetto1: 600, tetto2: 1000 },
+    { agr_codice: 'AGR0804', forata: 800, cieca: 400, tetto1: 800, tetto2: 400 },
+    { agr_codice: 'AGR0805', forata: 800, cieca: 500, tetto1: 800, tetto2: 500 },
+    { agr_codice: 'AGR0806', forata: 800, cieca: 600, tetto1: 800, tetto2: 600 },
+    { agr_codice: 'AGR0808', forata: 800, cieca: 800, tetto1: 800, tetto2: 800 },
+    { agr_codice: 'AGR0810', forata: 800, cieca: 1000, tetto1: 800, tetto2: 1000 },
+    { agr_codice: 'AGR1004', forata: 1000, cieca: 400, tetto1: 1000, tetto2: 400 },
+    { agr_codice: 'AGR1005', forata: 1000, cieca: 500, tetto1: 1000, tetto2: 500 },
+    { agr_codice: 'AGR1006', forata: 1000, cieca: 600, tetto1: 1000, tetto2: 600 },
+    { agr_codice: 'AGR1008', forata: 1000, cieca: 800, tetto1: 1000, tetto2: 800 },
+    { agr_codice: 'AGR1010', forata: 1000, cieca: 1000, tetto1: 1000, tetto2: 1000 },
+    { agr_codice: 'AGR1204', forata: 1200, cieca: 400, tetto1: 1200, tetto2: 400 },
+    { agr_codice: 'AGR1205', forata: 1200, cieca: 500, tetto1: 1200, tetto2: 500 },
+    { agr_codice: 'AGR1206', forata: 1200, cieca: 600, tetto1: 1200, tetto2: 600 },
+    { agr_codice: 'AGR1208', forata: 1200, cieca: 800, tetto1: 1200, tetto2: 800 },
+    { agr_codice: 'AGR1210', forata: 1200, cieca: 1000, tetto1: 1200, tetto2: 1000 },
+    { agr_codice: 'AGR1212', forata: 1200, cieca: 1000, tetto1: 1200, tetto2: 1000 },
+    { agr_codice: 'AGR1404', forata: 1400, cieca: 400, tetto1: 1400, tetto2: 400 },
+    { agr_codice: 'AGR1405', forata: 1400, cieca: 500, tetto1: 1400, tetto2: 500 },
+    { agr_codice: 'AGR1406', forata: 1400, cieca: 600, tetto1: 1400, tetto2: 600 },
+    { agr_codice: 'AGR1408', forata: 1400, cieca: 800, tetto1: 1400, tetto2: 800 },
+    { agr_codice: 'AGR1410', forata: 1400, cieca: 1000, tetto1: 1400, tetto2: 1000 },
+    { agr_codice: 'AGR1604', forata: 1600, cieca: 400, tetto1: 1600, tetto2: 400 },
+    { agr_codice: 'AGR1605', forata: 1600, cieca: 500, tetto1: 1600, tetto2: 500 },
+    { agr_codice: 'AGR1606', forata: 1600, cieca: 600, tetto1: 1600, tetto2: 600 },
+    { agr_codice: 'AGR1608', forata: 1600, cieca: 800, tetto1: 1600, tetto2: 800 },
+    { agr_codice: 'AGR1610', forata: 1600, cieca: 1000, tetto1: 1600, tetto2: 1000 },
+    { agr_codice: 'AGR1804', forata: 1800, cieca: 400, tetto1: 1800, tetto2: 400 },
+    { agr_codice: 'AGR1805', forata: 1800, cieca: 500, tetto1: 1800, tetto2: 500 },
+    { agr_codice: 'AGR1806', forata: 1800, cieca: 600, tetto1: 1800, tetto2: 600 }
+  ];
+  const stmt = db.prepare('INSERT OR IGNORE INTO agr_requirements (agr_codice, forata_misura, cieca_misura, tetto1_misura, tetto2_misura) VALUES (?, ?, ?, ?, ?)');
+  const insertMany = db.transaction((reqs) => {
+    for (const r of reqs) stmt.run(r.agr_codice, r.forata, r.cieca, r.tetto1, r.tetto2);
+  });
+  insertMany(seedRequirements);
+} catch (e) {
+  console.error('Error seeding agr_requirements:', e);
 }
 
 // Clean up duplicate processes if any exist before adding unique constraint
@@ -119,6 +456,10 @@ try {
     const upperName = name?.toUpperCase() || '';
     const upperCode = code?.toUpperCase() || '';
     
+    if (upperName.includes('PORTA AT') || upperCode.startsWith('AT-PO')) return 'PORTE AT';
+    if (upperName.includes('PIASTRA AT') || upperCode.startsWith('AT-PA')) return 'PIASTRE AT';
+    if (upperName.includes('INVOLUCRO AT') || upperCode.startsWith('AT-IN')) return 'INVOLUCRI AT';
+
     if (upperName.includes('PORTA') || upperName.includes('PORTE') || upperName.includes('ANTA') || upperName.includes('P.TA') || /^\d+X\d+/.test(upperName) || upperCode.startsWith('AG-PO') || upperCode.startsWith('PO') || upperCode.startsWith('PS')) {
       if (upperCode.endsWith('IB') || upperCode.endsWith('CB') || upperName.includes('IB') || upperName.includes('CB')) return 'Porte IB/CB';
       if (upperCode.endsWith('PX') || upperCode.endsWith('PV') || upperName.includes('PX') || upperName.includes('PV')) return 'Porte PX/PV';
@@ -129,22 +470,23 @@ try {
       if (upperCode.includes('MCR')) return 'Montanti Centrali Retro';
       return 'Retri';
     }
-    if (upperName.includes('LATERALE')) {
-      if (upperCode.includes('LB')) return 'Laterali Ibridi';
-      return 'Laterali';
-    }
-    if (upperName.includes('TETTO')) return 'Tetti';
     if (upperName.includes('PIASTRA')) {
       if (upperName.includes('LATERALE')) return 'Piastre Laterali';
       return 'Piastre Frontali';
     }
+    if (upperName.includes('LATERALE') || upperName.includes('LAT.')) {
+      if (upperCode.includes('LB') || upperName.includes('IBRIDO')) return 'Laterali Ibridi';
+      return 'Laterali';
+    }
+    if (upperName.includes('TETTO') && !upperName.includes('STT AGR')) return 'Tetti';
     if (upperName.includes('BASI&TETTI') || (upperName.includes('BASI') && upperName.includes('TETTI'))) return 'Basi&Tetti';
+
+    if (upperName.includes('STRUTTURE AGM') || upperName.includes('STRUTTURA AGM') || upperCode.startsWith('AGM')) return 'Strutture AGM';
     if (upperName.includes('STRUTTURE AGR') || upperName.includes('STRUTTURA AGR')) return 'Strutture Agr';
     if (upperName.includes('AGS')) return 'AGS';
     if (upperName.includes('AGC')) return 'AGC';
     if (upperName.includes('AGLM')) return 'AGLM';
     if (upperName.includes('AGLC')) return 'AGLC';
-    if (upperName.includes('INVOLUCRO AT')) return 'INVOLUCRI AT';
     if (upperName.includes('CRISTALLO') || upperName.includes('VETRO')) return 'Cristalli';
     return 'Altro';
   };
@@ -175,6 +517,28 @@ try {
 
 try {
   db.exec('ALTER TABLE articles ADD COLUMN scorta INTEGER DEFAULT 10;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN prezzo_lamiera REAL DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN prezzo_taglio REAL DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN prezzo_piega REAL DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN prezzo_verniciatura REAL DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN prezzo_gommatura REAL DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN prezzo_montaggio REAL DEFAULT 0;');
+} catch (e) {}
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN prezzo_vendita REAL DEFAULT 0;');
 } catch (e) {}
 
 try {
@@ -253,6 +617,18 @@ try {
   db.exec('ALTER TABLE movements_log ADD COLUMN commessa TEXT;');
 } catch (e) {}
 
+try {
+  db.exec('ALTER TABLE movements_log ADD COLUMN tempo INTEGER;');
+} catch (e) {}
+
+try {
+  db.exec("DELETE FROM articles WHERE nome LIKE 'PORTA AT %' AND famiglia = 'PORTE';");
+  db.exec("DELETE FROM articles WHERE nome LIKE 'INVOLUCRO AT%' AND famiglia = 'INVOLUCRI AT';");
+  console.log('Removed PORTA AT and INVOLUCRO AT from standard articles table.');
+} catch (e) {
+  console.error('Error removing AT items from articles:', e);
+}
+
 console.log('Applying cleanup and standardization migrations...');
 try {
   db.exec(`
@@ -293,6 +669,113 @@ try {
 
 // Seeding articles
 const seedArticles = [
+  { nome: 'PIASTRA AT 200X300', codice: 'AT-PA0203', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 250X300', codice: 'AT-PA02503', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 300X300', codice: 'AT-PA0303', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 300X400', codice: 'AT-PA0304', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 300X500', codice: 'AT-PA0305', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 400X300', codice: 'AT-PA0403', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 400X400', codice: 'AT-PA0404', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 400X500', codice: 'AT-PA0405', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 400X600', codice: 'AT-PA0406', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 500X500', codice: 'AT-PA0505', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 500X700', codice: 'AT-PA0507', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 600X400', codice: 'AT-PA0604', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 600X600', codice: 'AT-PA0606', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 600X800', codice: 'AT-PA0608', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 600X1000', codice: 'AT-PA0610', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 600X1200', codice: 'AT-PA0612', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 800X600', codice: 'AT-PA0806', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 800X800', codice: 'AT-PA0808', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 800X1000', codice: 'AT-PA0810', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 800X1200', codice: 'AT-PA0812', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 1000X800', codice: 'AT-PA1008', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 1000X1000', codice: 'AT-PA1010', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 1000X1200', codice: 'AT-PA1012', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 1000X1400', codice: 'AT-PA1014', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 1200X800', codice: 'AT-PA1208', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 1200X1000', codice: 'AT-PA1210', famiglia: 'PIASTRE AT' },
+  { nome: 'PIASTRA AT 1200X1200', codice: 'AT-PA1212', famiglia: 'PIASTRE AT' },
+  { nome: 'PORTA AT 200X300 STD', codice: 'AT-PO0203-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 250X300 STD', codice: 'AT-PO02503-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 300X300 STD', codice: 'AT-PO0303-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 300X400 STD', codice: 'AT-PO0304-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 300X500 STD', codice: 'AT-PO0305-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 400X300 STD', codice: 'AT-PO0403-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 400X400 STD', codice: 'AT-PO0404-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 400X500 STD', codice: 'AT-PO0405-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 400X600 STD', codice: 'AT-PO0406-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 500X500 STD', codice: 'AT-PO0505-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 500X700 STD', codice: 'AT-PO0507-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 600X400 STD', codice: 'AT-PO0604-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 600X600 STD', codice: 'AT-PO0606-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 600X800 STD', codice: 'AT-PO0608-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 600X1000 STD', codice: 'AT-PO0610-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 600X1200 STD', codice: 'AT-PO0612-STD', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X600 IB', codice: 'AT-PO0806-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X600 CB', codice: 'AT-PO0806-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X800 IB', codice: 'AT-PO0808-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X800 CB', codice: 'AT-PO0808-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X1000 IB', codice: 'AT-PO0810-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X1000 CB', codice: 'AT-PO0810-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X1200 IB', codice: 'AT-PO0812-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 800X1200 CB', codice: 'AT-PO0812-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X800 IB', codice: 'AT-PO1008-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X800 CB', codice: 'AT-PO1008-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X1000 IB', codice: 'AT-PO1010-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X1000 CB', codice: 'AT-PO1010-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X1200 IB', codice: 'AT-PO1012-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X1200 CB', codice: 'AT-PO1012-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X1400 IB', codice: 'AT-PO1014-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1000X1400 CB', codice: 'AT-PO1014-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1200X800 IB', codice: 'AT-PO1208-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1200X800 CB', codice: 'AT-PO1208-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1200X1000 IB', codice: 'AT-PO1210-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1200X1000 CB', codice: 'AT-PO1210-CB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1200X1200 IB', codice: 'AT-PO1212-IB', famiglia: 'PORTE AT' },
+  { nome: 'PORTA AT 1200X1200 CB', codice: 'AT-PO1212-CB', famiglia: 'PORTE AT' },
+  { nome: 'INVOLUCRO AT 200X300X150', codice: 'AT-IN2315', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 250X300X150', codice: 'AT-IN25315', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 300X300X150', codice: 'AT-IN3315', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 300X400X150', codice: 'AT-IN3415', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 300X400X200', codice: 'AT-IN3420', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 300X500X150', codice: 'AT-IN3515', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 300X500X200', codice: 'AT-IN3520', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 300X500X250', codice: 'AT-IN3525', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 400X400X200', codice: 'AT-IN4420', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 400X500X150', codice: 'AT-IN4515', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 400X500X200', codice: 'AT-IN4520', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 400X500X250', codice: 'AT-IN4525', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 400X600X200', codice: 'AT-IN4620', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 400X600X250', codice: 'AT-IN4625', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 500X500X200', codice: 'AT-IN5520', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 500X500X250', codice: 'AT-IN5525', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 500X700X200', codice: 'AT-IN5720', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 500X700X250', codice: 'AT-IN5725', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X400X400', codice: 'AT-IN6440', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X600X200', codice: 'AT-IN6620', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X600X250', codice: 'AT-IN6625', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X600X300', codice: 'AT-IN6630', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X600X400', codice: 'AT-IN6640', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X800X200', codice: 'AT-IN6820', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X800X250', codice: 'AT-IN6825', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X800X300', codice: 'AT-IN6830', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X800X400', codice: 'AT-IN6840', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X1000X250', codice: 'AT-IN61025', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X1000X300', codice: 'AT-IN61030', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X1000X400', codice: 'AT-IN61040', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 600X1200X300', codice: 'AT-IN61230', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 800X800X200', codice: 'AT-IN8820', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 800X800X300', codice: 'AT-IN8830', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 800X1000X250', codice: 'AT-IN81025', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 800X1000X300', codice: 'AT-IN81030', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 800X1200X300', codice: 'AT-IN81230', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 1000X800X200', codice: 'AT-IN10820', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 1000X1000X300', codice: 'AT-IN101030', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 1000X1000X400', codice: 'AT-IN101040', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 1000X1200X300', codice: 'AT-IN101230', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 1000X1400X300', codice: 'AT-IN101430', famiglia: 'INVOLUCRI AT' },
+  { nome: 'INVOLUCRO AT 1200X1200X300', codice: 'AT-IN121230', famiglia: 'INVOLUCRI AT' },
   { nome: 'PORTA 200X1800', codice: 'AG-PO0218' },
   { nome: 'PORTA 300X1800', codice: 'AG-PO0318' },
   { nome: 'PORTA 300X2000', codice: 'AG-PO0320' },
@@ -421,106 +904,6 @@ const seedArticles = [
   { nome: 'PORTA CIECA AG L1000 H800 CON BATTUTA', codice: 'AG-PO1008CB' },
   { nome: 'PORTA CIECA AG L1000 H1000 IN BATTUTA', codice: 'AG-PO1010IB' },
   { nome: 'PORTA CIECA AG L1000 H1000 CON BATTUTA', codice: 'AG-PO1010CB' },
-  { nome: 'INVOLUCRO AT 1000X1000X300', codice: 'AT-IN101030', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X1000X400', codice: 'AT-IN101040', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X1200X300', codice: 'AT-IN101230', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X1400X300', codice: 'AT-IN101430', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X800X200', codice: 'AT-IN10820', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X800X300', codice: 'AT-IN10830', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1200X1000X300', codice: 'AT-IN121030', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1200X1200X300', codice: 'AT-IN121230', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1200X800X300', codice: 'AT-IN12830', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X500X200', codice: 'AT-IN4520', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X500X250', codice: 'AT-IN4525', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X600X200', codice: 'AT-IN4620', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X600X250', codice: 'AT-IN4625', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X500X200', codice: 'AT-IN5520', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X500X250', codice: 'AT-IN5525', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X700X200', codice: 'AT-IN5720', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X700X250', codice: 'AT-IN5725', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1000X250', codice: 'AT-IN61025', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1000X300', codice: 'AT-IN61030', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1000X400', codice: 'AT-IN61040', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1200X300', codice: 'AT-IN61230', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X400X200', codice: 'AT-IN6420', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X200', codice: 'AT-IN6620', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X250', codice: 'AT-IN6625', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X300', codice: 'AT-IN6630', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X400', codice: 'AT-IN6640', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X200', codice: 'AT-IN6820', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X250', codice: 'AT-IN6825', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X400', codice: 'AT-IN6840', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X1000X250', codice: 'AT-IN81025', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X1000X300', codice: 'AT-IN81030', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X600X300', codice: 'AT-IN8630', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X800X200', codice: 'AT-IN8820', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X800X300', codice: 'AT-IN8830', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT1000X1000X200 - PRS', codice: 'AT-IN101020-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT1000X1000X300 - PRS', codice: 'AT-IN101030-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT1000X1000X400 - PRS', codice: 'AT-IN101040-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X1200X300 - PRS', codice: 'AT-IN101230-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X1400X300 - PRS', codice: 'AT-IN101430-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X800X200 - PRS', codice: 'AT-IN10820-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1000X800X300 - PRS', codice: 'AT-IN10830-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1200X1000X300 - PRS', codice: 'AT-IN121030-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1200X1200X300 - PRS', codice: 'AT-IN121230-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 1200X800X300 - PRS', codice: 'AT-IN12830-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 200X300X150', codice: 'AT-IN2315', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 200X300X150 - PRS', codice: 'AT-IN2315-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 250X300X150', codice: 'AT-IN25315', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 250X300X150 - PRS', codice: 'AT-IN25315-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X300X150', codice: 'AT-IN3315', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X300X150 - PRS', codice: 'AT-IN3315-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X400X150', codice: 'AT-IN3415', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X400X150 - PRS', codice: 'AT-IN3415-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X400X200', codice: 'AT-IN3420', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X400X200 - PRS', codice: 'AT-IN3420-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X500X150', codice: 'AT-IN3515', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X500X150 - PRS', codice: 'AT-IN3515-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X500X200', codice: 'AT-IN3520', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X500X250', codice: 'AT-IN3525', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 300X500X250 - PRS', codice: 'AT-IN3525-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X300X150', codice: 'AT-IN4315', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X300X150 - PERSONALIZZATO', codice: 'AT-IN4315-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X300X200', codice: 'AT-IN4320', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X300X200 - PERSONALIZZATO', codice: 'AT-IN4320-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT L400 H400 P200', codice: 'AT-IN4420_000001', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X400X200', codice: 'AT-IN4420', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X400X200 - PERSONALIZZATO', codice: 'AT-IN4420-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X500X150', codice: 'AT-IN4515', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X500X150 - PERSONALIZZATO', codice: 'AT-IN4515-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X500X200 - PERSONALIZZATO', codice: 'AT-IN4520-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X500X250 - PERSONALIZZATO', codice: 'AT-IN4525-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X600X200 - PERSONALIZZATO', codice: 'AT-IN4620-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 400X600X250 - PERSONALIZZATO', codice: 'AT-IN4625-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X500X200 - PERSONALIZZATO', codice: 'AT-IN5520-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X500X250 - PERSONALIZZATO', codice: 'AT-IN5525-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X700X200 - PERSONALIZZATO', codice: 'AT-IN5720-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 500X700X250 - PERSONALIZZATO', codice: 'AT-IN5725-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1000X250 - PERSONALIZZATO', codice: 'AT-IN61025-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1000X300 - PERSONALIZZATO', codice: 'AT-IN61030-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1000X400 - PERSONALIZZATO', codice: 'AT-IN61040-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X1200X300 - PERSONALIZZATO', codice: 'AT-IN61230-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X400X200 - PERSONALIZZATO', codice: 'AT-IN6420-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X400X400', codice: 'AT-IN6440', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X400X400 - PERSONALIZZATO', codice: 'AT-IN6440-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X200 - PERSONALIZZATO', codice: 'AT-IN6620-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X250 - PERSONALIZZATO', codice: 'AT-IN6625-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X300 - PERSONALIZZATO', codice: 'AT-IN6630-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X600X400 - PERSONALIZZATO', codice: 'AT-IN6640-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X200 - PERSONALIZZATO', codice: 'AT-IN6820-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X250 - PERSONALIZZATO', codice: 'AT-IN6825-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X300', codice: 'AT-IN6830', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X300 - PERSONALIZZATO', codice: 'AT-IN6830-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 600X800X400 - PERSONALIZZATO', codice: 'AT-IN6840-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT L800 H1000 P300', codice: 'AT-IN81020', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X1000X250 - PERSONALIZZATO', codice: 'AT-IN81025-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X1000X300 - PERSONALIZZATO', codice: 'AT-IN81030-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X1200X300', codice: 'AT-IN81230', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X1200X300 - PERSONALIZZATO', codice: 'AT-IN81230-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X600X300 - PERSONALIZZATO', codice: 'AT-IN8630-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X800X200 - PERSONALIZZATO', codice: 'AT-IN8820-PRS', famiglia: 'INVOLUCRI AT' },
-  { nome: 'INVOLUCRO AT 800X800X300 - PERSONALIZZATO', codice: 'AT-IN8830-PRS', famiglia: 'INVOLUCRI AT' },
   { nome: 'PANNELLO RETRO AG L250 H1800', codice: 'AG-RE02518', famiglia: 'PANNELLI RETRO' },
   { nome: 'PANNELLO RETRO AG L300 H1800', codice: 'AG-RE0318', famiglia: 'PANNELLI RETRO' },
   { nome: 'PANNELLO RETRO AG L300 H2000', codice: 'AG-RE0320', famiglia: 'PANNELLI RETRO' },
@@ -573,8 +956,7 @@ const seedArticles = [
   { nome: 'PANNELLO RETRO AG L1600 H1400', codice: 'AG-RE1614', famiglia: 'PANNELLI RETRO' },
   { nome: 'PANNELLO RETRO AG L1800 H800', codice: 'AG-RE188', famiglia: 'PANNELLI RETRO' },
   { nome: 'PANNELLO RETRO AG L2000 H800', codice: 'AG-RE208', famiglia: 'PANNELLI RETRO' },
-  { nome: 'PANNELLO RETRO AG L2000 H1000', codice: 'AG-RE2010', famiglia: 'PANNELLI RETRO' },
-  { nome: 'PIASTRA CIECA AG INS. FRONTALE 300X2000', codice: 'AG-PA0320F', famiglia: 'PIASTRE' },
+  { nome: 'PANNELLO RETRO AG L2000 H1000', codice: 'AG-RE2010', famiglia: 'PANNELLI RETRO' },  { nome: 'PIASTRA CIECA AG INS. FRONTALE 300X2000', codice: 'AG-PA0320F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 400X1400', codice: 'AG-PA0414F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 400X1600', codice: 'AG-PA0416F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 400X1800', codice: 'AG-PA0418F', famiglia: 'PIASTRE' },
@@ -584,11 +966,15 @@ const seedArticles = [
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 600X1200', codice: 'AG-PA0612F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 600X1400', codice: 'AG-PA0614F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 600X1600', codice: 'AG-PA0616F', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. FRONTALE 600X1800', codice: 'AG-PA0618F', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. FRONTALE 600X2000', codice: 'AG-PA0620F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 600X2200', codice: 'AG-PA0622F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 800X1000', codice: 'AG-PA0810F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 800X1200', codice: 'AG-PA0812F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 800X1400', codice: 'AG-PA0814F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 800X1600', codice: 'AG-PA0816F', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. FRONTALE 800X1800', codice: 'AG-PA0818F', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. FRONTALE 800X2000', codice: 'AG-PA0820F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 800X2200', codice: 'AG-PA0822F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 1000X1000', codice: 'AG-PA1010F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 1000X1200', codice: 'AG-PA1012F', famiglia: 'PIASTRE' },
@@ -619,7 +1005,102 @@ const seedArticles = [
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 2000X800', codice: 'AG-PA2008F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 2000X1000', codice: 'AG-PA2010F', famiglia: 'PIASTRE' },
   { nome: 'PIASTRA CIECA AG INS. FRONTALE 2000X1200', codice: 'AG-PA2012F', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 300X2000', codice: 'AG-PA0320L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 400X1400', codice: 'AG-PA0414L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 400X1600', codice: 'AG-PA0416L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 400X1800', codice: 'AG-PA0418L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 400X2000', codice: 'AG-PA0420L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 400X2200', codice: 'AG-PA0422L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 600X1000', codice: 'AG-PA0610L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 600X1200', codice: 'AG-PA0612L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 600X1400', codice: 'AG-PA0614L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 600X1600', codice: 'AG-PA0616L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 600X1800', codice: 'AG-PA0618L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 600X2000', codice: 'AG-PA0620L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 600X2200', codice: 'AG-PA0622L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 800X1000', codice: 'AG-PA0810L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 800X1200', codice: 'AG-PA0812L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 800X1400', codice: 'AG-PA0814L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 800X1600', codice: 'AG-PA0816L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 800X1800', codice: 'AG-PA0818L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 800X2000', codice: 'AG-PA0820L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 800X2200', codice: 'AG-PA0822L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1000X1000', codice: 'AG-PA1010L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1000X1200', codice: 'AG-PA1012L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1000X1400', codice: 'AG-PA1014L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1000X1600', codice: 'AG-PA1016L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1000X2200', codice: 'AG-PA1022L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1200X800', codice: 'AG-PA1208L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1200X1000', codice: 'AG-PA1210L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1200X1200', codice: 'AG-PA1212L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1200X1400', codice: 'AG-PA1214L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1200X1600', codice: 'AG-PA1216L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1200X2200', codice: 'AG-PA1222L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1400X800', codice: 'AG-PA1408L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1400X1000', codice: 'AG-PA1410L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1400X1200', codice: 'AG-PA1412L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1400X1800', codice: 'AG-PA1418L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1400X2000', codice: 'AG-PA1420L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1400X2200', codice: 'AG-PA1422L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1600X800', codice: 'AG-PA1608L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1600X1000', codice: 'AG-PA1610L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1600X1200', codice: 'AG-PA1612L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1600X1400', codice: 'AG-PA1614L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1600X1800', codice: 'AG-PA1618L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1600X2000', codice: 'AG-PA1620L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1600X2200', codice: 'AG-PA1622L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1800X1000', codice: 'AG-PA1810L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 1800X1200', codice: 'AG-PA1812L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 2000X800', codice: 'AG-PA2008L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 2000X1000', codice: 'AG-PA2010L', famiglia: 'PIASTRE' },
+  { nome: 'PIASTRA CIECA AG INS. LATERALE 2000X1200', codice: 'AG-PA2012L', famiglia: 'PIASTRE' },
 ];
+
+// Generate Strutture AGR articles
+const widths = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800];
+const heights = [400, 500, 600, 800, 1000, 1200];
+
+for (const w of widths) {
+  for (const h of heights) {
+    if (w === 300 && h > 600) continue;
+    if (w === 400 && h > 1000) continue;
+    if (w === 600 && h > 1000) continue;
+    if (w === 800 && h > 1000) continue;
+    if (w === 1000 && h > 1000) continue;
+    if (w === 1200 && h > 1200) continue;
+    if (w === 1400 && h > 1000) continue;
+    if (w === 1600 && h > 1000) continue;
+    if (w === 1800 && h > 600) continue;
+
+    const wStr = (w / 100).toString().padStart(2, '0');
+    const hStr = (h / 100).toString().padStart(2, '0');
+    
+    seedArticles.push({ 
+      nome: `STT AGR BASE ${w}X${h}`, 
+      codice: `AGR-STB${wStr}${hStr}`, 
+      famiglia: 'Strutture Agr' 
+    });
+    seedArticles.push({ 
+      nome: `STT AGR TETTO ${w}X${h}`, 
+      codice: `AGR-STT${wStr}${hStr}`, 
+      famiglia: 'Strutture Agr' 
+    });
+    
+    // User requested STRUTTURA AGR articles
+    seedArticles.push({
+      nome: `STRUTTURA AGR ${w}X${h}`,
+      codice: `AGR${wStr}${hStr}`,
+      famiglia: 'Strutture Agr'
+    });
+  }
+}
+
+// Ensure AGR1212 is also included as it's in the user's list
+seedArticles.push({
+  nome: 'STRUTTURA AGR 1200X1200',
+  codice: 'AGR1212',
+  famiglia: 'Strutture Agr'
+});
 
 const insertArticle = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, famiglia) VALUES (?, ?, ?)');
 const insertProcess = db.prepare('INSERT OR IGNORE INTO processes (articolo_id) VALUES (?)');
@@ -665,8 +1146,18 @@ try {
       deleteOldPiastra.run(nome);
     }
 
+    // Rimuovi vecchie Porte AT senza tipo
+    db.prepare("DELETE FROM articles WHERE famiglia = 'PORTE AT' AND nome NOT LIKE '% STD' AND nome NOT LIKE '% IB' AND nome NOT LIKE '% CB'").run();
+
     for (const art of seedArticles) {
-      insertArticle.run(art.nome, art.codice, (art as any).famiglia || null);
+      const res = insertArticle.run(art.nome, art.codice, (art as any).famiglia || null);
+      if (res.changes === 0) {
+        // Update existing articles to ensure they have the correct name and family
+        db.prepare('UPDATE articles SET nome = ?, famiglia = ? WHERE codice = ?').run(art.nome, (art as any).famiglia || null, art.codice);
+      }
+      if (art.codice.startsWith('AGR')) {
+        // console.log(`Seeded/Updated AGR article: ${art.codice}`);
+      }
     }
     
     // Assicura che ogni articolo abbia una riga in processes
@@ -947,16 +1438,32 @@ try {
       { article: 'PORTA CIECA AG L500 H2000 CON BATTUTA', month: 'MARZO', qty: 1, client: 'MINGAZZINI', commessa: 'C*' },
     ];
 
+    /*
     for (const c of userCommitments) {
-      const art = db.prepare('SELECT id FROM articles WHERE nome = ?').get(c.article) as any;
-      if (art) {
-        // Check if already exists to avoid duplicates
-        const exists = db.prepare('SELECT id FROM commitments WHERE articolo_id = ? AND cliente = ? AND commessa = ? AND note = ?').get(art.id, c.client, c.commessa, c.month);
-        if (!exists) {
-          db.prepare('INSERT INTO commitments (articolo_id, cliente, commessa, quantita, note, fase_produzione, operatore) VALUES (?, ?, ?, ?, ?, ?, ?)')
-            .run(art.id, c.client, c.commessa, c.qty, c.month, 'Verniciatura', 'System Seed 2026');
-        }
-      }
+      ...
+    }
+    */
+    
+    // Reset all commitments and impegni_clienti for a clean slate
+    try {
+      db.exec('DELETE FROM commitments');
+      db.exec('UPDATE articles SET impegni_clienti = 0');
+      console.log('Database cleared: commitments deleted, impegni_clienti reset.');
+    } catch (e) {
+      console.error("Error resetting commitments:", e);
+    }
+
+    // Migration to update old movement logs to the new 'Scarico' phase and 'scarico da commessa' type
+    try {
+      db.exec(`
+        UPDATE movements_log 
+        SET fase = 'Scarico', tipo = 'scarico da commessa' 
+        WHERE tipo IN ('evasione', 'Evasione Commessa', 'spedizione commessa')
+           OR (tipo = 'scarico' AND (fase IN ('impegni', 'spedizione', 'impegni_evasione', 'impegni_evasione_commessa', 'spedizione commessa') OR fase IS NULL));
+      `);
+      console.log('Movement log migration completed successfully.');
+    } catch (e) {
+      console.error('Error during movement log migration:', e);
     }
   })();
   console.log('Seed and update transaction completed successfully.');

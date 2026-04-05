@@ -4,6 +4,8 @@ import { Plus, Trash2, Edit2, Check, X, Search } from 'lucide-react';
 import clsx from 'clsx';
 import { getDisponibilita } from '../utils';
 import ConfirmModal from './ConfirmModal';
+import { addArticle, updateArticle, deleteArticle, updateProcess } from '../api';
+import toast from 'react-hot-toast';
 
 interface ArticlesTableProps {
   articles: Article[];
@@ -14,13 +16,20 @@ interface ArticlesTableProps {
 
 export default function ArticlesTable({ articles, commitments, processes, onUpdate }: ArticlesTableProps) {
   const [isAdding, setIsAdding] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [confirmModal, setConfirmModal] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void | Promise<void>;
+    variant?: 'danger' | 'info';
+  }>({
     isOpen: false,
     title: '',
     message: '',
-    onConfirm: () => {}
+    onConfirm: () => {},
+    variant: 'danger'
   });
   
   const [formData, setFormData] = useState({
@@ -36,66 +45,61 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
 
   const filteredArticles = articles
     .filter(a => 
-      a.nome.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      a.codice.toLowerCase().includes(searchQuery.toLowerCase())
+      (a.nome || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+      (a.codice || '').toLowerCase().includes(searchQuery.toLowerCase())
     )
-    .sort((a, b) => a.codice.localeCompare(b.codice));
+    .sort((a, b) => {
+      const dispA = getDisponibilita(a, commitments);
+      const dispB = getDisponibilita(b, commitments);
+      
+      // Sort by availability: negative first, then zero, then positive
+      if (dispA < 0 && dispB >= 0) return -1;
+      if (dispA >= 0 && dispB < 0) return 1;
+      if (dispA === 0 && dispB > 0) return -1;
+      if (dispA > 0 && dispB === 0) return 1;
+      
+      return dispA - dispB;
+    });
 
   const handleAdd = async () => {
     try {
-      const res = await fetch('/api/articles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      });
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Errore ${res.status}: ${errorText.substring(0, 100)}`);
-      }
+      await addArticle(formData);
       setIsAdding(false);
       setFormData({ nome: '', codice: '', verniciati: 0, impegni_clienti: 0, scorta: 10, piega: 0, taglio: 0, saldatura: 0 });
+      toast.success('Articolo aggiunto con successo');
       onUpdate();
-    } catch (error) {
+    } catch (error: any) {
+      toast.error(error.message || 'Errore durante l\'aggiunta dell\'articolo');
       console.error("Error adding article:", error);
     }
   };
 
   const handleUpdate = async (id: string) => {
     try {
-      const res = await fetch(`/api/articles/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nome: formData.nome,
-          codice: formData.codice,
-          verniciati: formData.verniciati,
-          impegni_clienti: formData.impegni_clienti,
-          scorta: formData.scorta,
-          piega: formData.piega // Some logic relies on piega in articles
-        })
+      await updateArticle(id, {
+        nome: formData.nome,
+        codice: formData.codice,
+        verniciati: formData.verniciati,
+        impegni_clienti: formData.impegni_clienti,
+        scorta: formData.scorta,
+        piega: formData.piega
       });
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Errore ${res.status}: ${errorText.substring(0, 100)}`);
-      }
 
       const process = processes.find(p => p.articolo_id === id);
       if (process) {
-        await fetch(`/api/processes/${process.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            taglio: formData.taglio,
-            piega: formData.piega,
-            saldatura: formData.saldatura,
-            verniciatura: formData.verniciati // Keep verniciatura in sync with verniciati
-          })
+        await updateProcess(process.id, {
+          taglio: formData.taglio,
+          piega: formData.piega,
+          saldatura: formData.saldatura,
+          verniciatura: formData.verniciati
         });
       }
 
       setEditingId(null);
+      toast.success('Articolo aggiornato con successo');
       onUpdate();
-    } catch (error) {
+    } catch (error: any) {
+      toast.error(error.message || 'Errore durante l\'aggiornamento dell\'articolo');
       console.error("Error updating article:", error);
     }
   };
@@ -107,13 +111,11 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
       message: 'Sei sicuro di voler eliminare questo articolo?',
       onConfirm: async () => {
         try {
-          const res = await fetch(`/api/articles/${id}`, { method: 'DELETE' });
-          if (!res.ok) {
-            const errorText = await res.text();
-            throw new Error(`Errore ${res.status}: ${errorText.substring(0, 100)}`);
-          }
+          await deleteArticle(id);
+          toast.success('Articolo eliminato con successo');
           onUpdate();
-        } catch (error) {
+        } catch (error: any) {
+          toast.error(error.message || 'Errore durante l\'eliminazione dell\'articolo');
           console.error("Error deleting article:", error);
         }
       }
@@ -147,7 +149,7 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
           process?.taglio || 0,
           process?.piega || 0,
           process?.saldatura || 0,
-          a.verniciati,
+          a.nome.toLowerCase().includes('piastre') ? (a.piega || 0) : a.verniciati,
           a.impegni_clienti,
           getDisponibilita(a, commitments)
         ].join(',');
@@ -194,13 +196,14 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
         message={confirmModal.message}
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        variant={confirmModal.variant}
       />
       <div className="flex flex-col h-full">
       <div className="p-5 border-b border-slate-200/80 bg-white/50 backdrop-blur-sm flex items-center justify-between rounded-t-xl">
         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
           Gestione Articoli
           <span className="bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-full text-xs font-semibold shadow-sm">
-            {articles.length}
+            Totale: {articles.length}
           </span>
         </h2>
         <div className="flex items-center gap-2">
@@ -245,39 +248,47 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
         <table className="w-full min-w-[600px] text-sm text-left">
           <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
             <tr>
-              <th className="px-4 py-3 font-semibold w-48 hidden">Articolo</th>
+              <th className="px-4 py-3 font-semibold w-48">Articolo</th>
               <th className="px-4 py-3 font-semibold">Codice</th>
-              <th className="px-4 py-3 font-semibold text-right" title="Verniciati (o Piega per le piastre)">Vern. / Piega</th>
+              <th className="px-4 py-3 font-semibold text-right" title="Pezzi Verniciati (o Grezzi per Piastre)">Verniciati / Grezzo</th>
               <th className="px-4 py-3 font-semibold text-right">Impegni</th>
+              <th className="px-4 py-3 font-semibold text-right">Tot.</th>
               <th className="px-4 py-3 font-semibold text-right">Scorta</th>
-              <th className="px-4 py-3 font-semibold text-right">Disp.</th>
               <th className="px-4 py-3 font-semibold text-center w-16">Azioni</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isAdding && (
               <tr className="bg-emerald-50/50">
-                <td className="px-4 py-2 hidden">
+                <td className="px-4 py-2">
                   <input type="text" className="w-full border border-slate-300 rounded px-2 py-1 text-sm" placeholder="Nome" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} />
                 </td>
                 <td className="px-4 py-2">
                   <input type="text" className="w-full border border-slate-300 rounded px-2 py-1 text-sm" placeholder="Codice" value={formData.codice} onChange={e => setFormData({...formData, codice: e.target.value})} />
                 </td>
                 <td className="px-4 py-2">
-                  {formData.nome.toLowerCase().includes('piastra') ? (
-                    <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.piega} onChange={e => setFormData({...formData, piega: parseInt(e.target.value) || 0})} title="Quantità in Piega (le piastre non vengono verniciate)" />
-                  ) : (
-                    <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.verniciati} onChange={e => setFormData({...formData, verniciati: parseInt(e.target.value) || 0})} />
-                  )}
+                  <input 
+                    type="number" 
+                    className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right font-mono" 
+                    value={formData.nome.toLowerCase().includes('piastre') ? formData.piega : formData.verniciati} 
+                    onChange={e => {
+                      const val = parseInt(e.target.value) || 0;
+                      if (formData.nome.toLowerCase().includes('piastre')) {
+                        setFormData({...formData, piega: val});
+                      } else {
+                        setFormData({...formData, verniciati: val});
+                      }
+                    }} 
+                  />
                 </td>
-                <td className="px-4 py-2">
-                  <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.impegni_clienti} onChange={e => setFormData({...formData, impegni_clienti: parseInt(e.target.value) || 0})} />
+                <td className="px-4 py-2 text-right font-mono text-slate-700">
+                  {commitments.filter(c => String(c.articolo_id) === '0' && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0)}
                 </td>
-                <td className="px-4 py-2">
-                  <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" placeholder="Scorta" value={formData.scorta} onChange={e => setFormData({...formData, scorta: parseInt(e.target.value) || 0})} />
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-slate-400">
+                <td className="px-4 py-2 text-right font-mono font-bold text-slate-400">
                   {getDisponibilita({ id: '0', nome: formData.nome, codice: formData.codice, verniciati: formData.verniciati, impegni_clienti: formData.impegni_clienti, piega: formData.piega, scorta: formData.scorta }, commitments)}
+                </td>
+                <td className="px-4 py-2">
+                  <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right font-mono" placeholder="Scorta" value={formData.scorta} onChange={e => setFormData({...formData, scorta: parseInt(e.target.value) || 0})} />
                 </td>
                 <td className="px-4 py-2">
                   <div className="flex items-center justify-center gap-2">
@@ -290,45 +301,42 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
 
             {filteredArticles.map((article) => {
               const disponibilita = getDisponibilita(article, commitments);
-              const isNegative = disponibilita < 10;
-              const isPositive = disponibilita >= 10;
+              const isNegative = disponibilita < 0;
+              const isPositive = disponibilita >= 0;
               const isEditing = editingId === article.id;
 
               if (isEditing) {
                 return (
                   <tr key={article.id} className="bg-blue-50/50">
-                    <td className="px-4 py-2 hidden">
+                    <td className="px-4 py-2">
                       <input type="text" className="w-full border border-slate-300 rounded px-2 py-1 text-sm" value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})} />
                     </td>
                     <td className="px-4 py-2">
                       <input type="text" className="w-full border border-slate-300 rounded px-2 py-1 text-sm" value={formData.codice} onChange={e => setFormData({...formData, codice: e.target.value})} />
                     </td>
                     <td className="px-4 py-2">
-                      {article.nome.toLowerCase().includes('piastra') ? (
-                        <input 
-                          type="number" 
-                          className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right"
-                          value={formData.piega} 
-                          onChange={e => setFormData({...formData, piega: parseInt(e.target.value) || 0})} 
-                          title="Quantità in Piega (le piastre non vengono verniciate)"
-                        />
-                      ) : (
-                        <input 
-                          type="number" 
-                          className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right"
-                          value={formData.verniciati} 
-                          onChange={e => setFormData({...formData, verniciati: parseInt(e.target.value) || 0})} 
-                        />
-                      )}
+                      <input 
+                        type="number" 
+                        className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right font-mono"
+                        value={formData.nome.toLowerCase().includes('piastre') ? formData.piega : formData.verniciati} 
+                        onChange={e => {
+                          const val = parseInt(e.target.value) || 0;
+                          if (formData.nome.toLowerCase().includes('piastre')) {
+                            setFormData({...formData, piega: val});
+                          } else {
+                            setFormData({...formData, verniciati: val});
+                          }
+                        }} 
+                      />
                     </td>
-                    <td className="px-4 py-2">
-                      <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.impegni_clienti} onChange={e => setFormData({...formData, impegni_clienti: parseInt(e.target.value) || 0})} />
+                    <td className="px-4 py-2 text-right font-mono text-slate-700">
+                      {commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0)}
                     </td>
-                    <td className="px-4 py-2">
-                      <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right" value={formData.scorta} onChange={e => setFormData({...formData, scorta: parseInt(e.target.value) || 0})} />
-                    </td>
-                    <td className="px-4 py-2 text-right font-mono text-slate-400">
+                    <td className="px-4 py-2 text-right font-mono font-bold text-slate-400">
                       {getDisponibilita({...article, verniciati: formData.verniciati, impegni_clienti: formData.impegni_clienti, piega: formData.piega, scorta: formData.scorta}, commitments)}
+                    </td>
+                    <td className="px-4 py-2">
+                      <input type="number" className="w-16 border border-slate-300 rounded px-2 py-1 text-sm text-right font-mono" value={formData.scorta} onChange={e => setFormData({...formData, scorta: parseInt(e.target.value) || 0})} />
                     </td>
                     <td className="px-4 py-2">
                       <div className="flex items-center justify-center gap-2">
@@ -342,27 +350,30 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
 
               return (
                 <tr key={article.id} className="hover:bg-slate-50 transition-colors group">
-                  <td className={clsx("px-4 py-3 font-medium truncate max-w-[150px] hidden", isNegative ? "text-amber-500" : "text-slate-900")} title={article.nome}>
+                  <td className={clsx("px-4 py-3 font-medium truncate max-w-[150px]", isNegative ? "text-amber-500" : "text-slate-900")} title={article.nome}>
                     {article.nome}
                   </td>
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs">
                     {article.codice}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-slate-700">
-                    {article.nome.toLowerCase().includes('piastra') ? (
-                      <span title="Quantità in Piega (le piastre non vengono verniciate)">{article.piega}</span>
-                    ) : (
-                      article.verniciati
-                    )}
+                  <td className={clsx(
+                    "px-4 py-3 text-right font-mono",
+                    (article.nome.toLowerCase().includes('piastre') ? article.piega : article.verniciati) < 0 ? "text-red-600 font-bold" : "text-slate-700"
+                  )}>
+                    {article.nome.toLowerCase().includes('piastre') ? (article.piega || 0) : article.verniciati}
                   </td>
                   <td className={clsx(
                     "px-4 py-3 text-right font-mono",
-                    article.impegni_clienti < 0 ? "bg-red-50 text-red-700" : "text-slate-700"
+                    (() => {
+                      const tableImp = commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
+                      const totalImp = Math.max(tableImp, article.impegni_clienti || 0);
+                      return totalImp < 0 ? "text-red-600 font-bold" : "text-slate-700";
+                    })()
                   )}>
-                    {article.impegni_clienti}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-slate-400">
-                    {article.scorta}
+                    {(() => {
+                      const tableImp = commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
+                      return Math.max(tableImp, article.impegni_clienti || 0);
+                    })()}
                   </td>
                   <td className={clsx(
                     "px-4 py-3 text-right font-mono font-bold",
@@ -370,7 +381,10 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
                     isPositive && "text-emerald-500",
                     disponibilita === 0 && "text-slate-400"
                   )}>
-                    {disponibilita > 0 ? `+${disponibilita}` : disponibilita}
+                    {disponibilita}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-slate-400">
+                    {article.scorta}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
