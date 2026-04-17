@@ -157,8 +157,43 @@ export default function ProductionMovement({ articles, onUpdate, username, role 
       const allProcesses = await fetchProcesses();
       
       for (const row of validRows) {
-        const article = allArticles.find(a => a.codice === row.articoloId || a.id === row.articoloId);
-        if (!article) throw new Error(`Articolo non trovato: ${row.articoloId}`);
+        let article = allArticles.find(a => 
+          (a.codice || '').toLowerCase() === row.articoloId.trim().toLowerCase() || 
+          (a.codice || '').toLowerCase().startsWith(row.articoloId.trim().toLowerCase() + '-') ||
+          a.id === row.articoloId
+        );
+        
+        if (!article) {
+          // Auto-create the article if it doesn't exist
+          const res = await fetch('/api/articles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              nome: row.articoloId.trim().toUpperCase(),
+              codice: row.articoloId.trim().toUpperCase(),
+              verniciati: 0,
+              impegni_clienti: 0,
+              piega: 0,
+              scorta: 0
+            })
+          });
+          
+          if (!res.ok) {
+             throw new Error(`Articolo non trovato e impossibile crearlo: ${row.articoloId}`);
+          }
+          
+          article = await res.json();
+          allArticles.push(article);
+          
+          allProcesses.push({
+            id: Date.now().toString(),
+            articolo_id: article.id,
+            taglio: 0,
+            piega: 0,
+            saldatura: 0,
+            verniciatura: 0
+          });
+        }
         
         const qty = parseInt(row.quantita.toString(), 10);
         if (isNaN(qty) || qty < 0 || (qty === 0 && tipo !== 'rettifica')) throw new Error(`Quantità non valida per ${article.nome}`);
@@ -291,7 +326,7 @@ export default function ProductionMovement({ articles, onUpdate, username, role 
                       required
                     />
                     <datalist id="articles-list-mov">
-                      {articles.filter(a => isPhaseEnabled(getCategory(a.nome, a.codice), fase)).map(a => (
+                      {articles.map(a => (
                         <option key={a.id} value={a.codice}>{a.nome}</option>
                       ))}
                     </datalist>
@@ -431,7 +466,7 @@ export default function ProductionMovement({ articles, onUpdate, username, role 
                   available = item.verniciati;
                   tipo = 'ver';
                 } else {
-                  const isPiastra = item.articolo_nome.toLowerCase().includes('piastra');
+                  const isPiastra = (item.articolo_nome || '').toLowerCase().includes('piastra');
                   available = isPiastra ? item.piega : item.verniciati;
                   tipo = isPiastra ? 'gre' : 'ver';
                 }

@@ -40,8 +40,13 @@ export default function MovementsView() {
   }, []);
 
   const formatDate = (dateString: string) => {
-    // Append 'Z' to treat SQLite's UTC timestamp correctly
-    const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
+    if (!dateString) return '-';
+    // Normalize SQLite's 'YYYY-MM-DD HH:MM:SS' to ISO 'YYYY-MM-DDTHH:MM:SSZ'
+    const normalized = dateString.includes('T') ? dateString : dateString.replace(' ', 'T') + 'Z';
+    const date = new Date(normalized);
+    
+    if (isNaN(date.getTime())) return dateString;
+
     return date.toLocaleString('it-IT', {
       day: '2-digit',
       month: '2-digit',
@@ -102,7 +107,7 @@ export default function MovementsView() {
       if (filters.tipo === 'verde') {
         matchesTipo = m.tipo === 'carico';
       } else if (filters.tipo === 'giallo') {
-        matchesTipo = m.tipo === 'scarico' || m.tipo === 'scarico da commessa';
+        matchesTipo = m.tipo === 'scarico' || m.tipo === 'scarico da commessa' || m.tipo === 'SCARICO COMP. AGM' || m.tipo === 'SCARICO COMP. AGR';
       } else if (filters.tipo === 'azzurro') {
         matchesTipo = m.tipo === 'Evasione Commessa';
       } else {
@@ -348,7 +353,7 @@ export default function MovementsView() {
                     <span className={clsx(
                       "px-1.5 py-0.5 rounded text-[10px] font-bold uppercase",
                       m.tipo === 'carico' ? "bg-emerald-100 text-emerald-700" : 
-                      m.tipo === 'scarico' || m.tipo === 'scarico da commessa' ? "bg-yellow-100 text-yellow-800" : 
+                      m.tipo === 'scarico' || m.tipo === 'scarico da commessa' || m.tipo === 'SCARICO COMP. AGM' || m.tipo === 'SCARICO COMP. AGR' ? "bg-yellow-100 text-yellow-800" : 
                       m.tipo === 'Evasione Commessa' ? "bg-sky-100 text-sky-700" :
                       m.tipo === 'evasione' ? "bg-indigo-100 text-indigo-700" :
                       "bg-blue-100 text-blue-700"

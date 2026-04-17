@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import clsx from 'clsx';
 import { Commitment, Article, AUTHORIZED_USERS } from '../types';
-import { CheckCircle2, Package, ListOrdered, Truck, Edit2, X, Check } from 'lucide-react';
+import { CheckCircle2, Package, ListOrdered, Truck, Edit2, X, Check, Loader2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import CommitmentPriorityManager from './CommitmentPriorityManager';
 import { updateArticle, updateProcess, updateCommitment, addMovementLog, shipCommitment, fulfillCommitment } from '../api';
@@ -14,6 +15,7 @@ interface CommitmentsViewProps {
 
 export default function CommitmentsView({ onUpdate, username, articles, commitments }: CommitmentsViewProps) {
   const [showPriorityManager, setShowPriorityManager] = useState(false);
+  const [loadingActionId, setLoadingActionId] = useState<string | null>(null);
   
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{
@@ -25,7 +27,7 @@ export default function CommitmentsView({ onUpdate, username, articles, commitme
   }>({ cliente: '', commessa: '', quantita: 0, articolo_id: '', note: '' });
 
   const isAuthorized = AUTHORIZED_USERS.includes(username);
-  const canEdit = ['lucaturati', 'adeleturati', 'robertobonalumi'].includes(username.toLowerCase());
+  const canEdit = ['lucaturati', 'adeleturati', 'robertobonalumi'].includes((username || '').toLowerCase());
 
   const startEdit = (c: Commitment) => {
     if (!canEdit) return;
@@ -67,6 +69,8 @@ export default function CommitmentsView({ onUpdate, username, articles, commitme
   };
 
   const handleFulfill = async (id: string) => {
+    if (loadingActionId) return;
+    setLoadingActionId(id);
     try {
       await fulfillCommitment(id, username);
       toast.success('Impegno evaso con successo!');
@@ -75,11 +79,13 @@ export default function CommitmentsView({ onUpdate, username, articles, commitme
       const message = error instanceof Error ? error.message : (typeof error === 'string' ? error : 'Errore sconosciuto');
       toast.error(message, { duration: 5000 });
       console.error("Error fulfilling commitment:", error);
+    } finally {
+      setLoadingActionId(null);
     }
   };
 
   const handleShip = async (id: string) => {
-    if (username.toLowerCase() !== 'samantalimonta') {
+    if ((username || '').toLowerCase() !== 'samantalimonta') {
       toast.error('Utente non autorizzato. Solo SamantaLimonta può segnare le commesse come evase/spedite.', {
         duration: 5000,
         icon: '🛑'
@@ -87,6 +93,8 @@ export default function CommitmentsView({ onUpdate, username, articles, commitme
       return;
     }
 
+    if (loadingActionId) return;
+    setLoadingActionId(id);
     try {
       await shipCommitment(id, username);
       toast.success('Commessa spedita con successo!');
@@ -94,6 +102,8 @@ export default function CommitmentsView({ onUpdate, username, articles, commitme
     } catch (error: any) {
       toast.error(error.message, { duration: 5000 });
       console.error("Error shipping commitment:", error);
+    } finally {
+      setLoadingActionId(null);
     }
   };
 
@@ -184,7 +194,7 @@ export default function CommitmentsView({ onUpdate, username, articles, commitme
                 <th className="px-4 py-3 font-semibold">Fase / Stato</th>
                 <th className="px-4 py-3 font-semibold text-center">Priorità</th>
                 <th className="px-4 py-3 font-semibold text-center">Q.tà</th>
-                {(isAuthorized || username.toLowerCase() === 'samantalimonta') && <th className="px-4 py-3 font-semibold text-center">Azioni</th>}
+                {(isAuthorized || (username || '').toLowerCase() === 'samantalimonta') && <th className="px-4 py-3 font-semibold text-center">Azioni</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -351,26 +361,34 @@ export default function CommitmentsView({ onUpdate, username, articles, commitme
                         {c.quantita}
                       </span>
                     </td>
-                    {(isAuthorized || username.toLowerCase() === 'samantalimonta') && (
+                    {(isAuthorized || (username || '').toLowerCase() === 'samantalimonta') && (
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-2">
                           {isAuthorized && c.stato_lavorazione !== 'Completato' && (
                             <button
                               onClick={() => handleFulfill(c.id)}
-                              className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                              disabled={loadingActionId === c.id}
+                              className={clsx(
+                                "inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                                loadingActionId === c.id ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-700"
+                              )}
                               title="Segna come pronto per la consegna (scala pezzi)"
                             >
-                              <CheckCircle2 className="h-4 w-4" />
+                              {loadingActionId === c.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                               Pronto
                             </button>
                           )}
-                          {username.toLowerCase() === 'samantalimonta' && c.stato_lavorazione === 'Completato' && (
+                          {(username || '').toLowerCase() === 'samantalimonta' && c.stato_lavorazione === 'Completato' && (
                             <button
                               onClick={() => handleShip(c.id)}
-                              className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                              disabled={loadingActionId === c.id}
+                              className={clsx(
+                                "inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                                loadingActionId === c.id ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700"
+                              )}
                               title="Segna come spedito (rimuove dalla lista)"
                             >
-                              <Truck className="h-4 w-4" />
+                              {loadingActionId === c.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
                               Spedisci
                             </button>
                           )}

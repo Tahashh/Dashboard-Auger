@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Article, Process, Commitment, Macchina5000, TaglioLaser, FaseTaglio } from '../types';
 import { getDisponibilita, getCategory, isPhaseEnabled } from '../utils';
-import { Package, Search, X, Filter, ChevronDown, Menu, Scissors, Flame, Play, Plus, Edit2, CheckCircle } from 'lucide-react';
+import { Package, Search, X, Filter, ChevronDown, Menu, Scissors, Flame, Play, Plus, Edit2, CheckCircle, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 import React from 'react';
-import { addMacchina5000, addFaseTaglio, addFaseSaldatura, addTaglioLaser, updateArticle, updateProcess } from '../api';
+import { addMacchina5000, addFaseTaglio, addFaseSaldatura, addTaglioLaser, updateArticle, updateProcess, addArticle, apiCall } from '../api';
 import { toast } from 'react-hot-toast';
 
 interface Produzione2026ViewProps {
@@ -66,6 +66,7 @@ export default function Produzione2026View({
   username,
   role
 }: Produzione2026ViewProps) {
+  console.log('DEBUG: Produzione2026View articles count:', articles.length);
   const [searchTerm, setSearchTerm] = useState('');
   const [commessaSearch, setCommessaSearch] = useState('');
   const [clienteSearch, setClienteSearch] = useState('');
@@ -90,6 +91,165 @@ export default function Produzione2026View({
   const bottomScrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [contentWidth, setContentWidth] = useState(0);
+
+  const [isInsertingMancanti, setIsInsertingMancanti] = useState(false);
+
+  const insertMancanti = async () => {
+    if (isInsertingMancanti) return;
+    
+    setIsInsertingMancanti(true);
+    
+    // Fetch fresh articles to ensure we have the most up-to-date list
+    let currentArticles = articles;
+    try {
+      const freshArticles = await apiCall<Article[]>('/api/articles');
+      if (Array.isArray(freshArticles)) {
+        currentArticles = freshArticles;
+      }
+    } catch (e) {
+      console.warn("Could not fetch fresh articles, using current state", e);
+    }
+
+    if (!currentArticles || currentArticles.length === 0) {
+      toast.error("Dati articoli non caricati. Riprova tra poco.");
+      setIsInsertingMancanti(false);
+      return;
+    }
+
+    const tettiDaInserire = [
+      { nome: "PANN. TETTO AG 400x300", codice: "AGR0403T" },
+      { nome: "PANN. TETTO AG 400x400", codice: "AGR0404T" },
+      { nome: "PANN. TETTO AG 400x500", codice: "AGR0405T" },
+      { nome: "PANN. TETTO AG 300x500", codice: "AGR0305T" },
+      { nome: "PANN. TETTO AG 300x600", codice: "AGR0306T" },
+      { nome: "PANN. TETTO AG 600x400", codice: "AGR0604T" },
+      { nome: "PANN. TETTO AG 600x500", codice: "AGR0605T" },
+      { nome: "PANN. TETTO AG 600x600", codice: "AGR0606T" },
+      { nome: "PANN. TETTO AG 800x400", codice: "AGR0804T" },
+      { nome: "PANN. TETTO AG 800x500", codice: "AGR0805T" },
+      { nome: "PANN. TETTO AG 800x600", codice: "AGR0806T" },
+      { nome: "PANN. TETTO AG 800x800", codice: "AGR0808T" },
+      { nome: "PANN. TETTO AG 1000x400", codice: "AGR1004T" },
+      { nome: "PANN. TETTO AG 1000x500", codice: "AGR1005T" },
+      { nome: "PANN. TETTO AG 1000x600", codice: "AGR1006T" },
+      { nome: "PANN. TETTO AG 1000x800", codice: "AGR1008T" },
+      { nome: "PANN. TETTO AG 1000x1000", codice: "AGR1010T" },
+      { nome: "PANN. TETTO AG 1200x400", codice: "AGR1204T" },
+      { nome: "PANN. TETTO AG 1200x500", codice: "AGR1205T" },
+      { nome: "PANN. TETTO AG 1200x600", codice: "AGR1206T" },
+      { nome: "PANN. TETTO AG 1200x800", codice: "AGR1208T" },
+      { nome: "PANN. TETTO AG 1200x1000", codice: "AGR1210T" },
+      { nome: "PANN. TETTO AG 1400x400", codice: "AGR1404T" },
+      { nome: "PANN. TETTO AG 1400x500", codice: "AGR1405T" },
+      { nome: "PANN. TETTO AG 1400x600", codice: "AGR1406T" },
+      { nome: "PANN. TETTO AG 1400x800", codice: "AGR1408T" },
+      { nome: "PANN. TETTO AG 1400x1000", codice: "AGR1410T" },
+      { nome: "PANN. TETTO AG 1600x400", codice: "AGR1604T" },
+      { nome: "PANN. TETTO AG 1600x500", codice: "AGR1605T" },
+      { nome: "PANN. TETTO AG 1600x600", codice: "AGR1606T" },
+      { nome: "PANN. TETTO AG 1600x800", codice: "AGR1608T" },
+      { nome: "PANN. TETTO AG 1600x1000", codice: "AGR1610T" }
+    ];
+
+    const lateraliDaInserire = [
+      { nome: "PANN. LATERALE AG 250x1800", codice: "AGR02518L" },
+      { nome: "PANN. LATERALE AG 300x1600", codice: "AGR0316L" },
+      { nome: "PANN. LATERALE AG 300x1800", codice: "AGR0318L" },
+      { nome: "PANN. LATERALE AG 400x1000", codice: "AGR0410L" },
+      { nome: "PANN. LATERALE AG 400x1200", codice: "AGR0412L" },
+      { nome: "PANN. LATERALE AG 400x1400", codice: "AGR0414L" },
+      { nome: "PANN. LATERALE AG 400x1600", codice: "AGR0416L" },
+      { nome: "PANN. LATERALE AG 400x1800", codice: "AGR0418L" },
+      { nome: "PANN. LATERALE AG 400x2000", codice: "AGR0420L" },
+      { nome: "PANN. LATERALE AG 400x2200", codice: "AGR0422L" },
+      { nome: "PANN. LATERALE AG 500x1000", codice: "AGR0510L" },
+      { nome: "PANN. LATERALE AG 500x1200", codice: "AGR0512L" },
+      { nome: "PANN. LATERALE AG 500x1400", codice: "AGR0514L" },
+      { nome: "PANN. LATERALE AG 500x1600", codice: "AGR0516L" },
+      { nome: "PANN. LATERALE AG 500x1800", codice: "AGR0518L" },
+      { nome: "PANN. LATERALE AG 500x2000", codice: "AGR0520L" },
+      { nome: "PANN. LATERALE AG 500x2000 TOSA", codice: "AGR0520L TOSA" },
+      { nome: "PANN. LATERALE AG 500x2200", codice: "AGR0522L" },
+      { nome: "PANN. LATERALE AG 600x1000", codice: "AGR0610L" },
+      { nome: "PANN. LATERALE AG 600x1200", codice: "AGR0612L" },
+      { nome: "PANN. LATERALE AG 600x1400", codice: "AGR0614L" },
+      { nome: "PANN. LATERALE AG 600x1600", codice: "AGR0616L" },
+      { nome: "PANN. LATERALE AG 600x1800", codice: "AGR0618L" },
+      { nome: "PANN. LATERALE AG 600x2000", codice: "AGR0620L" },
+      { nome: "PANN. LATERALE AG 600x2000 ZANONI", codice: "AGR0620L ZANONI" },
+      { nome: "PANN. LATERALE AG 600x2200", codice: "AGR0622L" },
+      { nome: "PANN. LATERALE AG 800x1000", codice: "AGR0810L" },
+      { nome: "PANN. LATERALE AG 800x1200", codice: "AGR0812L" },
+      { nome: "PANN. LATERALE AG 800x1400", codice: "AGR0814L" },
+      { nome: "PANN. LATERALE AG 800x1600", codice: "AGR0816L" },
+      { nome: "PANN. LATERALE AG 800x1800", codice: "AGR0818L" },
+      { nome: "PANN. LATERALE AG 800x2000", codice: "AGR0820L" },
+      { nome: "PANN. LATERALE AG 800x2200", codice: "AGR0822L" },
+      { nome: "PANN. LATERALE AG 1000x1200", codice: "AGR1012L" },
+      { nome: "PANN. LATERALE AG 1000x1800", codice: "AGR1018L" },
+      { nome: "PANN. LATERALE AG 1000x2000", codice: "AGR1020L" },
+      { nome: "PANN. LATERALE AG 1000x2200", codice: "AGR1022L" },
+      { nome: "PANN. LATERALE AG 1200x1000", codice: "AGR1210L" }
+    ];
+
+    const lateraliIbridiDaInserire = [
+      { nome: "PANN. LATERALE IBRIDO 400x2000", codice: "AGR0420LB" },
+      { nome: "PANN. LATERALE IBRIDO 400x2200", codice: "AGR0422LB" },
+      { nome: "PANN. LATERALE IBRIDO 500x1000", codice: "AGR0510LB" },
+      { nome: "PANN. LATERALE IBRIDO 500x1200", codice: "AGR0512LB" },
+      { nome: "PANN. LATERALE IBRIDO 600x1800", codice: "AGR0618LB" },
+      { nome: "PANN. LATERALE IBRIDO 600x2000", codice: "AGR0620LB" },
+      { nome: "PANN. LATERALE IBRIDO 800x1000", codice: "AGR0810LB" },
+      { nome: "PANN. LATERALE IBRIDO 800x2000", codice: "AGR0820LB" },
+      { nome: "PANN. LATERALE IBRIDO 800x2200", codice: "AGR0822LB" }
+    ];
+    
+    const tuttiDaInserire = [...tettiDaInserire, ...lateraliDaInserire, ...lateraliIbridiDaInserire];
+    
+    let insertedCount = 0;
+    let skippedCount = 0;
+
+    // Create a set of existing codes for faster and more reliable lookup
+    const existingCodes = new Set(currentArticles.map(a => (a.codice || '').trim().toUpperCase()));
+
+    for (const articolo of tuttiDaInserire) {
+      const targetCode = (articolo.codice || '').trim().toUpperCase();
+      
+      if (existingCodes.has(targetCode)) {
+        skippedCount++;
+        continue;
+      }
+
+      try {
+        await addArticle({
+          nome: articolo.nome,
+          codice: articolo.codice,
+          verniciati: 0,
+          impegni_clienti: 0,
+          piega: 0,
+          scorta: 0
+        });
+        insertedCount++;
+        // Add to the set to prevent duplicates within the same loop
+        existingCodes.add(targetCode);
+      } catch (error: any) {
+        // If the server still says it exists, it's definitely there
+        if (error.message && error.message.includes('già esistente')) {
+          skippedCount++;
+        } else {
+          console.error(`Errore inserimento ${articolo.codice}:`, error);
+        }
+      }
+    }
+    
+    setIsInsertingMancanti(false);
+    if (insertedCount > 0) {
+      toast.success(`${insertedCount} articoli inseriti! (${skippedCount} già presenti)`);
+      onUpdate();
+    } else {
+      toast.error(`Nessun nuovo articolo inserito. Tutti e ${skippedCount} erano già presenti.`);
+    }
+  };
 
   const isAndrea = username === 'Andrea';
   const isOsvaldo = username === 'Osvaldo';
@@ -241,7 +401,8 @@ export default function Produzione2026View({
   };
 
   const openCutModal = (article: Article) => {
-    const disp = getDisponibilita(article, commitments);
+    const totalImpCount = getArticleTotalCommitments(article.id);
+    const disp = (article.verniciati || 0) - totalImpCount;
     const process = getProcess(article.id);
     
     // Calculate total pieces in pipeline
@@ -268,9 +429,11 @@ export default function Produzione2026View({
 
   // Helper to get commitments for an article, optionally filtered by commessa and cliente
   const getArticleCommitments = (articleId: string, phase?: string) => {
+    const targetPhase = phase || 'Verniciatura';
+
     return (commitments || []).filter(c => {
       const matchesArticle = c.articolo_id === articleId;
-      const matchesPhase = !phase || c.fase_produzione === phase;
+      const matchesPhase = c.fase_produzione === targetPhase;
       const matchesCommessa = !debouncedCommessa || (c.commessa || '').toLowerCase().includes(debouncedCommessa.toLowerCase());
       const matchesCliente = !debouncedCliente || (c.cliente || '').toLowerCase().includes(debouncedCliente.toLowerCase());
       const isNotCompleted = c.stato_lavorazione !== 'Completato';
@@ -280,17 +443,14 @@ export default function Produzione2026View({
 
   // Helper to get total commitments for an article (unfiltered by search, optionally filtered by phase)
   const getArticleTotalCommitments = (articleId: string, phase?: string) => {
+    const article = articles.find(a => String(a.id) === String(articleId));
+    const targetPhase = phase || 'Verniciatura';
+
     const tableSum = (commitments || []).filter(c => 
       String(c.articolo_id) === String(articleId) && 
-      (!phase || c.fase_produzione === phase) && 
+      c.fase_produzione === targetPhase && 
       c.stato_lavorazione !== 'Completato'
     ).reduce((sum, c) => sum + c.quantita, 0);
-
-    // If no phase is specified, we are looking for the total commitments
-    if (!phase) {
-      const article = articles.find(a => String(a.id) === String(articleId));
-      return Math.max(tableSum, article?.impegni_clienti || 0);
-    }
 
     return tableSum;
   };
@@ -454,7 +614,7 @@ export default function Produzione2026View({
 
   const FAMILIES = [
     'Porte', 'Retri', 'Laterali', 'Tetti', 'Piastre', 'Basi&Tetti', 
-    'AGS', 'AGC', 'AGLM', 'AGLC', 'Cristalli', 'Strutture Agr'
+    'Cristalli', 'Strutture Agr', 'Strutture AGM'
   ];
 
   const filteredArticles = useMemo(() => {
@@ -465,19 +625,26 @@ export default function Produzione2026View({
       let matchesCategory = false;
       const cat = getCategory(a.nome || '', a.codice || '');
       
+      // DEBUG: Log articles that might be filtered out
+      if (cat === 'Laterali') {
+        console.log('DEBUG: Article in Laterali:', a.nome, a.codice);
+      }
+      
       if (['PORTE AT', 'PIASTRE AT', 'INVOLUCRI AT'].includes(cat)) {
         return false;
       }
       
       // Exclude AGR components from Produzione 2026, only show valid master codes
-      if (cat === 'Strutture Agr' && !codiciValidi.includes(a.codice || '')) {
-        return false;
-      }
+      // if (cat === 'Strutture Agr' && !codiciValidi.includes(a.codice || '')) {
+      //   return false;
+      // }
 
       if (categoryFilter === 'Tutte') {
         matchesCategory = true;
       } else if (categoryFilter === 'Strutture Agr') {
         matchesCategory = cat === 'Strutture Agr';
+      } else if (categoryFilter === 'Strutture AGM') {
+        matchesCategory = cat === 'Strutture AGM';
       } else if (categoryFilter === 'Porte') {
         matchesCategory = cat.startsWith('Porte');
       } else if (categoryFilter === 'Retri') {
@@ -486,12 +653,15 @@ export default function Produzione2026View({
         matchesCategory = ['Laterali', 'Laterali Ibridi'].includes(cat);
       } else if (categoryFilter === 'Piastre') {
         matchesCategory = ['Piastre Frontali', 'Piastre Laterali'].includes(cat);
+      } else if (categoryFilter === 'Tetti') {
+        matchesCategory = cat === 'Tetti' || (a.nome?.toUpperCase().startsWith('PANN. TETTO AGR') || false);
       } else {
         matchesCategory = cat === categoryFilter;
       }
       
       // If commessa or cliente search is active, the article must have matching commitments
-      const articleCommitments = commitments.filter(c => c.articolo_id === a.id && c.stato_lavorazione !== 'Completato');
+      const targetPhase = 'Verniciatura';
+      const articleCommitments = commitments.filter(c => c.articolo_id === a.id && c.stato_lavorazione !== 'Completato' && c.fase_produzione === targetPhase);
       
       const matchesCommessa = !debouncedCommessa || articleCommitments.some(c => 
         (c.commessa || '').toLowerCase().includes(debouncedCommessa.toLowerCase())
@@ -501,7 +671,8 @@ export default function Produzione2026View({
         (c.cliente || '').toLowerCase().includes(debouncedCliente.toLowerCase())
       );
 
-      const disp = getDisponibilita(a, commitments);
+      const totalImpCount = getArticleTotalCommitments(a.id);
+      const disp = (a.verniciati || 0) - totalImpCount;
       let matchesAvailability = true;
       if (availabilityFilter === 'positive') matchesAvailability = disp > 0;
       else if (availabilityFilter === 'negative') matchesAvailability = disp < 0;
@@ -565,10 +736,6 @@ export default function Produzione2026View({
     ['Piastre Frontali', 'Piastre Laterali'],
     ['Basi&Tetti'],
     ['Strutture Agr'],
-    ['AGS'],
-    ['AGC'],
-    ['AGLM'],
-    ['AGLC'],
     ['Cristalli']
   ];
 
@@ -654,6 +821,20 @@ export default function Produzione2026View({
               <X className="h-5 w-5" />
             </button>
           )}
+          <button
+            onClick={insertMancanti}
+            disabled={isInsertingMancanti || articles.length === 0}
+            className="px-3 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {isInsertingMancanti ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Inserimento...
+              </>
+            ) : (
+              'Inserisci Mancanti'
+            )}
+          </button>
         </div>
       </div>
 
@@ -706,6 +887,9 @@ export default function Produzione2026View({
                   if (categoryFilter === 'Piastre') {
                     return ['Piastre Frontali', 'Piastre Laterali'].includes(category);
                   }
+                  if (categoryFilter === 'Tetti') {
+                    return category === 'Tetti';
+                  }
                   return category === categoryFilter;
                 }
                 
@@ -714,7 +898,7 @@ export default function Produzione2026View({
                   'Porte Standard', 'Porte IB/CB', 'Porte PX/PV', 'Porte INT/LAT/180°', 
                   'Retri', 'Montanti Centrali Retro',
                   'Laterali', 'Laterali Ibridi', 
-                  'Tetti', 
+                  'Tetti',
                   'Piastre Frontali', 'Piastre Laterali',
                   'Strutture Agr'
                 ];
@@ -726,7 +910,7 @@ export default function Produzione2026View({
               return (
                 <div key={colIdx} className="flex flex-col gap-6 min-w-[650px] w-[650px] flex-shrink-0">
                   {visibleCategories.map(category => {
-                    const categoryArticles = filteredArticles.filter(a => getCategory(a.nome || '', a.codice || '') === category);
+                    let categoryArticles = filteredArticles.filter(a => getCategory(a.nome || '', a.codice || '') === category);
                     
                     return (
                       <div key={category} className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
@@ -779,29 +963,17 @@ export default function Produzione2026View({
                         )}
                         {categoryArticles.map(article => {
                           const process = getProcess(article.id);
-                          const isPiastra = (article.nome || '').toUpperCase().includes('PIASTRA');
-                          const articleCommitments = commitments.filter(c => c.articolo_id === article.id && c.stato_lavorazione !== 'Completato');
-                          const disp = getDisponibilita(article, commitments);
+                          const targetPhase = 'Verniciatura';
+                          const articleCommitments = commitments.filter(c => c.articolo_id === article.id && c.stato_lavorazione !== 'Completato' && c.fase_produzione === targetPhase);
                           
                           const filteredImpCount = getArticleFilteredCommitmentsCount(article.id);
                           const totalImpCount = getArticleTotalCommitments(article.id);
+                          const disp = (article.verniciati || 0) - totalImpCount;
                           const isFiltered = debouncedCommessa || debouncedCliente;
                           
-                          // Calculate commitments for each phase
-                          const tagImp = getArticleTotalCommitments(article.id, 'Taglio');
-                          const greImp = getArticleTotalCommitments(article.id, 'Piega');
-                          const saldImp = getArticleTotalCommitments(article.id, 'Saldatura');
-                          const verImp = getArticleTotalCommitments(article.id, 'Verniciatura');
-
-                          const hasCommitments = tagImp > 0 || greImp > 0 || saldImp > 0 || verImp > 0;
-                          
                           let articleNameClass = "text-slate-800";
-                          if (hasCommitments) {
-                            const isWarning = 
-                              (tagImp > 0 && process.taglio < tagImp) ||
-                              (greImp > 0 && process.piega < greImp) ||
-                              (saldImp > 0 && process.saldatura < saldImp) ||
-                              (verImp > 0 && article.verniciati < verImp);
+                          if (totalImpCount > 0) {
+                            const isWarning = disp < 0;
                             
                             if (isWarning) {
                               articleNameClass = "text-orange-500 font-bold";
@@ -815,87 +987,9 @@ export default function Produzione2026View({
                             availabilityColorClass = "text-white font-bold bg-red-500";
                           }
 
-                          const tooltipContent = articleCommitments.length > 0 && (() => {
-                            const grouped = articleCommitments.reduce((acc, c) => {
-                              const { month } = parseNote(c.note);
-                              if (!acc[month]) acc[month] = [];
-                              acc[month].push(c);
-                              return acc;
-                            }, {} as Record<string, typeof articleCommitments>);
-
-                            const sortedMonths = Object.keys(grouped).sort((a, b) => {
-                              const indexA = mesi.indexOf(a);
-                              const indexB = mesi.indexOf(b);
-                              if (indexA === -1 && indexB === -1) return a.localeCompare(b);
-                              if (indexA === -1) return 1;
-                              if (indexB === -1) return -1;
-                              return indexA - indexB;
-                            });
-
-                            const isFrozen = frozenTooltipId === `${article.id}-imp`;
-
-                            return (
-                              <div className={clsx(
-                                "absolute top-full left-1/2 transform -translate-x-1/2 mt-2 z-50 w-72 bg-slate-900 text-white text-[10px] rounded-lg shadow-xl p-3 border border-slate-700 pointer-events-auto",
-                                isFrozen ? "block" : "hidden group-hover:block"
-                              )}>
-                                <div className="font-bold border-b border-slate-700 pb-2 mb-2 text-emerald-400 flex justify-between items-center">
-                                  <div className="flex flex-col">
-                                    <span>{isFiltered ? 'Impegni Filtrati:' : 'Dettaglio Impegni Attivi:'}</span>
-                                    {isFrozen && <span className="text-[8px] text-amber-400 animate-pulse">MODALITÀ BLOCCO ATTIVA</span>}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[9px] text-slate-400 font-normal italic">Raggruppati per mese</span>
-                                    {isFrozen && (
-                                      <button 
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setFrozenTooltipId(null);
-                                        }}
-                                        className="p-1 hover:bg-slate-800 rounded-full transition-colors"
-                                      >
-                                        <X className="w-3 h-3 text-slate-400" />
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="max-h-64 overflow-y-auto pr-1 custom-scrollbar space-y-4">
-                                  {sortedMonths.map(month => (
-                                    <div key={month} className="space-y-1">
-                                      <div className="text-amber-400 font-bold uppercase tracking-wider border-b border-slate-800 pb-0.5 mb-1 flex justify-between items-center">
-                                        <span>{month}</span>
-                                        <span className="text-[8px] font-normal text-slate-500">
-                                          {grouped[month].reduce((sum, c) => sum + c.quantita, 0)} pz
-                                        </span>
-                                      </div>
-                                      <ul className="text-left space-y-1.5">
-                                        {grouped[month].map(c => {
-                                          const { additionalNote } = parseNote(c.note);
-                                          return (
-                                            <li key={c.id} className="flex justify-between items-start border-b border-slate-800/50 pb-1 last:border-0">
-                                              <div className="flex flex-col truncate pr-2">
-                                                <span className="font-bold text-slate-100">{c.cliente}</span>
-                                                <span className="text-[9px] text-slate-400">
-                                                  Commessa: {c.commessa}
-                                                  {additionalNote && <span className="text-emerald-400 ml-1 font-bold">N.B: {additionalNote}</span>}
-                                                </span>
-                                              </div>
-                                              <span className="font-bold text-amber-400 whitespace-nowrap pt-0.5">{c.quantita} pz</span>
-                                            </li>
-                                          );
-                                        })}
-                                      </ul>
-                                    </div>
-                                  ))}
-                                </div>
-                                <div className="mt-2 pt-2 border-t border-slate-700 flex justify-between font-bold text-xs">
-                                  <span>{isFiltered ? 'Totale Filtrato:' : 'Totale Impegni:'}</span>
-                                  <span className="text-amber-400">{isFiltered ? filteredImpCount : totalImpCount} pz</span>
-                                </div>
-                                <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-t border-slate-700"></div>
-                              </div>
-                            );
-                          })();
+                          const tooltipText = articleCommitments.length > 0 
+                            ? articleCommitments.map(c => `${c.cliente} - ${c.commessa}: ${c.quantita}pz`).join('\n')
+                            : undefined;
 
                           const isEditing = editingArticleId === article.id;
 
@@ -1031,25 +1125,20 @@ export default function Produzione2026View({
                                   {isPhaseEnabled(category, 'Saldatura') && renderPhaseCell(process.saldatura, 'Saldatura', article.id, 'bg-blue-50/30 border-r border-slate-200', category)}
                                   {renderPhaseCell(article.verniciati, 'Verniciatura', article.id, 'bg-purple-50/30 border-r border-slate-200', category)}
                                   <td 
-                                    onClick={() => {
-                                      if ((isFiltered ? filteredImpCount : totalImpCount) > 0) {
-                                        setFrozenTooltipId(frozenTooltipId === `${article.id}-imp` ? null : `${article.id}-imp`);
-                                      }
-                                    }}
                                     className={clsx(
-                                    "px-2 py-1 text-center font-mono text-xs border-r border-slate-200 relative group cursor-help transition-all",
-                                    ((isFiltered ? filteredImpCount : totalImpCount) > 0 ? "bg-orange-50 text-orange-700 font-bold hover:bg-orange-100" : "text-slate-400"),
-                                    frozenTooltipId === `${article.id}-imp` && "ring-2 ring-inset ring-amber-400 bg-amber-50"
-                                  )}>
+                                    "px-2 py-1 text-center font-mono text-xs border-r border-slate-200 relative group transition-all",
+                                    ((isFiltered ? filteredImpCount : totalImpCount) > 0 ? "bg-orange-50 text-orange-700 font-bold cursor-help hover:bg-orange-100" : "text-slate-400")
+                                  )}
+                                    title={tooltipText}
+                                  >
                                     {isFiltered ? (
                                       <div className="flex flex-col items-center leading-tight">
                                         <span>{filteredImpCount}</span>
                                         <span className="text-[8px] opacity-50 font-normal">/{totalImpCount}</span>
                                       </div>
                                     ) : (
-                                      totalImpCount
+                                      totalImpCount > 0 ? totalImpCount : ''
                                     )}
-                                    {tooltipContent}
                                   </td>
                                   <td className={clsx("px-2 py-1 text-center font-mono text-sm border-r border-slate-200", availabilityColorClass)}>
                                     {disp}

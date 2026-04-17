@@ -26,6 +26,18 @@ webpush.setVapidDetails(
   vapidKeys.privateKey
 );
 
+function parseCassaDimensions(name: string) {
+  const match = name.match(/(\d+)X(\d+)X(\d+)/);
+  if (match) {
+    return {
+      L: parseInt(match[1]),
+      H: parseInt(match[2]),
+      P: parseInt(match[3])
+    };
+  }
+  return null;
+}
+
 // Setup Archive Directory
 const ARCHIVE_DIR = path.join(process.cwd(), 'archives');
 if (!existsSync(ARCHIVE_DIR)) {
@@ -35,8 +47,7 @@ if (!existsSync(ARCHIVE_DIR)) {
 const upload = multer({ dest: 'uploads/' });
 
 function archiveOldMovements() {
-  // L'utente ha richiesto che i movimenti non vengano MAI cancellati.
-  // Questa funzione è stata disabilitata per prevenire la perdita di dati.
+  // I movimenti non vengono cancellati per mantenere lo storico completo.
 }
 
 // Run archiving process on startup and then every 24 hours
@@ -109,7 +120,20 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+  
+  // Performance logging middleware
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      if (duration > 500) {
+        console.warn(`[PERF] Slow request: ${req.method} ${req.url} took ${duration}ms`);
+      }
+    });
+    next();
+  });
+
   console.log('Express middleware configured.');
 
   // Health check endpoint for Cloud Run
@@ -117,9 +141,19 @@ async function startServer() {
     res.json({ status: 'ok' });
   });
 
+  // --- API Clients ---
+  app.get('/api/clients', (req, res) => {
+    try {
+      const clients = db.prepare('SELECT * FROM clients ORDER BY nome ASC').all();
+      res.json(clients);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // --- API Routes ---
 
-  const CHAT_AUTHORIZED_USERS = ['LucaTurati', 'TahaJbala', 'TahaDev'];
+  const CHAT_AUTHORIZED_USERS = ['LucaTurati', 'TahaJbala', 'TahaDev', 'RobertoBonalumi', 'SamantaLimonta', 'SISTEMA'];
 
   // --- API Traverse Inventory ---
   app.get('/api/traverse', (req, res) => {
@@ -135,11 +169,42 @@ async function startServer() {
     const { tipo, misura, quantita } = req.body;
     console.log('Carico traverse:', { tipo, misura, quantita });
     try {
-      const stmt = db.prepare('INSERT INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, ?) ON CONFLICT(tipo, misura) DO UPDATE SET quantita = quantita + ?');
-      stmt.run(tipo, misura, quantita, quantita);
+      db.transaction(() => {
+        const stmt = db.prepare('INSERT INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, ?) ON CONFLICT(tipo, misura) DO UPDATE SET quantita = quantita + ?');
+        stmt.run(tipo, misura, quantita, quantita);
+        db.prepare('INSERT INTO movimenti_traverse (tipo_traversa, misura, quantita, tipo_movimento, origine) VALUES (?, ?, ?, ?, ?)')
+          .run(tipo, misura, quantita, 'carico', 'manuale');
+      })();
       res.json({ success: true });
     } catch (error: any) {
       console.error('Errore carico traverse:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/traverse/scarico', (req, res) => {
+    const { tipo, misura, quantita } = req.body;
+    try {
+      db.transaction(() => {
+        const inv = db.prepare('SELECT quantita FROM traverse_inventory WHERE tipo = ? AND misura = ?').get(tipo, misura) as any;
+        if (!inv || inv.quantita < quantita) {
+          throw new Error('Quantità insufficiente in magazzino');
+        }
+        db.prepare('UPDATE traverse_inventory SET quantita = quantita - ? WHERE tipo = ? AND misura = ?').run(quantita, tipo, misura);
+        db.prepare('INSERT INTO movimenti_traverse (tipo_traversa, misura, quantita, tipo_movimento, origine) VALUES (?, ?, ?, ?, ?)')
+          .run(tipo, misura, quantita, 'scarico', 'manuale');
+      })();
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/traverse/movimenti', (req, res) => {
+    try {
+      const movimenti = db.prepare('SELECT * FROM movimenti_traverse ORDER BY timestamp DESC LIMIT 100').all();
+      res.json(movimenti);
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
@@ -180,19 +245,29 @@ async function startServer() {
     const { agr_codice, quantita } = req.body;
     console.log('Saldatura richiesta:', { agr_codice, quantita });
     try {
-      const transaction = db.transaction(() => {
+      db.transaction(() => {
         const match = agr_codice.match(/^AGR(\d{2})(\d{2})$/);
         if (!match) throw new Error("Codice struttura non valido");
+
+        const halfQty = Math.floor(quantita / 2);
+        if (halfQty <= 0) throw new Error("Quantità insufficiente per divisione STB/STT");
+
+        const baseCode = agr_codice.replace('AGR', 'AGR-STB');
+        const tettoCode = agr_codice.replace('AGR', 'AGR-STT');
+
+        const baseArt = db.prepare('SELECT id FROM articles WHERE codice = ?').get(baseCode) as any;
+        const tettoArt = db.prepare('SELECT id FROM articles WHERE codice = ?').get(tettoCode) as any;
+
+        if (!baseArt || !tettoArt) throw new Error("Articoli AGR-STB o AGR-STT non trovati");
 
         const w = parseInt(match[1]) * 100;
         const h = parseInt(match[2]) * 100;
 
-        // 2. Check traverse availability
         const needed = [
-          { tipo: 'forata', misura: w, q: quantita * 2 },
-          { tipo: 'cieca', misura: h, q: quantita * 2 },
-          { tipo: 'tetto1', misura: w, q: quantita * 2 },
-          { tipo: 'tetto2', misura: h, q: quantita * 2 }
+          { tipo: 'forata', misura: w, q: halfQty * 2 },
+          { tipo: 'cieca', misura: h, q: halfQty * 2 },
+          { tipo: 'tetto', misura: w, q: halfQty * 2 },
+          { tipo: 'tetto', misura: h, q: halfQty * 2 }
         ];
 
         for (const item of needed) {
@@ -200,16 +275,25 @@ async function startServer() {
           if (!inv || inv.quantita < item.q) throw new Error(`Traverse insufficienti: ${item.tipo} ${item.misura}`);
         }
 
-        // 3. Scarico traverse
         for (const item of needed) {
           db.prepare('UPDATE traverse_inventory SET quantita = quantita - ? WHERE tipo = ? AND misura = ?').run(item.q, item.tipo, item.misura);
+          db.prepare('INSERT INTO movimenti_traverse (tipo_traversa, misura, quantita, tipo_movimento, origine, riferimento) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(item.tipo, item.misura, item.q, 'scarico', 'automatico', agr_codice);
         }
 
-        // 4. Aggiorna stato struttura
-        db.prepare('INSERT INTO casse_complete_at (articolo, totale) VALUES (?, ?) ON CONFLICT(articolo) DO UPDATE SET totale = totale + ?').run(agr_codice, quantita, quantita);
-      });
+        // Update processes for both components
+        const updateProc = (artId: number, qty: number) => {
+          const proc = db.prepare('SELECT saldatura FROM processes WHERE articolo_id = ?').get(artId) as any;
+          const newSald = (proc?.saldatura || 0) + qty;
+          db.prepare('UPDATE processes SET saldatura = ? WHERE articolo_id = ?').run(newSald, artId);
+          
+          db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(artId, 'saldatura', 'carico', qty, 'AUTO', 'MAGAZZINO', 'MAGAZZINO AGR', new Date().toISOString());
+        };
 
-      transaction();
+        updateProc(baseArt.id, halfQty);
+        updateProc(tettoArt.id, halfQty);
+      })();
       res.json({ success: true });
     } catch (error: any) {
       console.error('Errore saldatura:', error);
@@ -234,7 +318,10 @@ async function startServer() {
 
   app.post('/api/chat/messages', (req, res) => {
     const { sender, text } = req.body;
+    console.log(`[CHAT] POST /api/chat/messages - Sender: ${sender}, Text: ${text?.substring(0, 20)}...`);
+    
     if (!sender || !CHAT_AUTHORIZED_USERS.includes(sender)) {
+      console.warn(`[CHAT] Unauthorized sender: ${sender}`);
       return res.status(403).json({ error: 'Non autorizzato' });
     }
 
@@ -263,6 +350,7 @@ async function startServer() {
     const { username, password } = req.body;
     
     const users = [
+      { username: "fondatore@investortahashh10.com", password: "Auger2014", role: "admin" },
       { username: "LucaTurati", password: "Auger2014", role: "admin" },
       { username: "AdeleTurati", password: "Auger2014", role: "admin" },
       { username: "RobertoBonalumi", password: "Auger2014", role: "admin" },
@@ -432,6 +520,30 @@ async function startServer() {
     }
   });
 
+  // C. Gialle
+  app.get('/api/c-gialle', (req, res) => {
+    try {
+      const rows = db.prepare('SELECT * FROM c_gialle ORDER BY data_aggiornamento DESC').all();
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/c-gialle', (req, res) => {
+    const { articolo_spc, fase_richiesta, quantita, cliente, commessa, mese, note, operatore } = req.body;
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO c_gialle (articolo_spc, fase_richiesta, quantita, cliente, commessa, mese, note, operatore, stato, data_aggiornamento)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Iniziato', CURRENT_TIMESTAMP)
+      `);
+      const info = stmt.run(articolo_spc, fase_richiesta, quantita, cliente, commessa, mese, note, operatore);
+      res.json({ id: info.lastInsertRowid });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   // Movimenti C. Gialla
   app.get('/api/movimenti-c-gialla', (req, res) => {
     try {
@@ -443,11 +555,11 @@ async function startServer() {
   });
 
   app.post('/api/movimenti-c-gialla', (req, res) => {
-    const { articolo_spc, fase, quantita, cliente_commessa, operatore, tempo_totale, data_reg, quantita_lanciata } = req.body;
+    const { articolo_spc, fase, quantita, cliente, commessa, operatore, tempo_min, data_reg } = req.body;
     try {
-      const stmt = db.prepare('INSERT INTO movimenti_c_gialla (articolo_spc, fase, quantita, cliente_commessa, operatore, tempo_totale, data_reg, quantita_lanciata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      const info = stmt.run(articolo_spc, fase, quantita, cliente_commessa, operatore, tempo_totale, data_reg || new Date().toISOString(), quantita_lanciata || null);
-      res.json({ id: info.lastInsertRowid, articolo_spc, fase, quantita, cliente_commessa, operatore, tempo_totale, quantita_lanciata });
+      const stmt = db.prepare('INSERT INTO movimenti_c_gialla (articolo_spc, fase, quantita, cliente, commessa, operatore, tempo_min, data_reg) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      const info = stmt.run(articolo_spc, fase, quantita, cliente, commessa, operatore, tempo_min, data_reg || new Date().toISOString());
+      res.json({ id: info.lastInsertRowid, articolo_spc, fase, quantita, cliente, commessa, operatore, tempo_min });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -571,16 +683,13 @@ async function startServer() {
 
   // Articles CRUD
   app.get('/api/articles', (req, res) => {
-    console.log('GET /api/articles called');
     try {
       const articles = db.prepare(`
-        SELECT a.*, p.piega 
+        SELECT a.*, p.piega as process_piega, p.taglio, p.saldatura, p.verniciatura
         FROM articles a 
         LEFT JOIN processes p ON a.id = p.articolo_id
-        GROUP BY a.id
         ORDER BY a.codice ASC
       `).all();
-      console.log('Articles fetched:', articles.length);
       res.json(articles);
     } catch (error: any) {
       console.error('Error fetching articles:', error);
@@ -670,10 +779,10 @@ async function startServer() {
 
   app.put('/api/casse-at/piastre/:id', (req, res) => {
     const { id } = req.params;
-    const { articolo, codice, tag, gre, tot } = req.body;
+    const { articolo, codice, tag, gre, imp, tot } = req.body;
     try {
-      db.prepare('UPDATE piastre_at SET articolo = ?, codice = ?, tag = ?, gre = ?, tot = ? WHERE id = ?')
-        .run(articolo, codice, tag, gre, tot, id);
+      db.prepare('UPDATE piastre_at SET articolo = ?, codice = ?, tag = ?, gre = ?, imp = ?, tot = ? WHERE id = ?')
+        .run(articolo, codice, tag, gre, imp, tot, id);
       res.json({ success: true });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -691,10 +800,10 @@ async function startServer() {
 
   app.put('/api/casse-at/porte/:id', (req, res) => {
     const { id } = req.params;
-    const { articolo, codice, tag, gre, vern, tot } = req.body;
+    const { articolo, codice, tag, gre, vern, imp, tot } = req.body;
     try {
-      db.prepare('UPDATE porte_at SET articolo = ?, codice = ?, tag = ?, gre = ?, vern = ?, tot = ? WHERE id = ?')
-        .run(articolo, codice, tag, gre, vern, tot, id);
+      db.prepare('UPDATE porte_at SET articolo = ?, codice = ?, tag = ?, gre = ?, vern = ?, imp = ?, tot = ? WHERE id = ?')
+        .run(articolo, codice, tag, gre, vern, imp, tot, id);
       res.json({ success: true });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -712,10 +821,10 @@ async function startServer() {
 
   app.put('/api/casse-at/involucro/:id', (req, res) => {
     const { id } = req.params;
-    const { articolo, codice, tag, gre, sald, vern, mag, tot } = req.body;
+    const { articolo, codice, tag, gre, sald, vern, mag, imp, tot } = req.body;
     try {
-      db.prepare('UPDATE involucro_at SET articolo = ?, codice = ?, tag = ?, gre = ?, sald = ?, vern = ?, mag = ?, tot = ? WHERE id = ?')
-        .run(articolo, codice, tag, gre, sald, vern, mag, tot, id);
+      db.prepare('UPDATE involucro_at SET articolo = ?, codice = ?, tag = ?, gre = ?, sald = ?, vern = ?, mag = ?, imp = ?, tot = ? WHERE id = ?')
+        .run(articolo, codice, tag, gre, sald, vern, mag, imp, tot, id);
       res.json({ success: true });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -743,10 +852,140 @@ async function startServer() {
     }
   });
 
+  app.post('/api/casse-at/assemblaggio', (req, res) => {
+    const { L, H, P, Q, cliente, commessa } = req.body;
+    try {
+      const transaction = db.transaction(() => {
+        const cassaName = `CASSA AT COMPL. ${L}X${H}X${P}`;
+        
+        // 1. Find Piastra
+        const piastraName = `PIASTRA AT ${L}X${H}`;
+        const piastra = db.prepare('SELECT a.id as article_id, p.id as process_id, p.piega FROM articles a JOIN processes p ON a.id = p.articolo_id WHERE a.nome = ?').get(piastraName) as any;
+        if (!piastra) throw new Error(`Piastra non trovata: ${piastraName}`);
+        if (piastra.piega < Q) throw new Error(`Piastre GRE insufficienti (${piastra.piega} < ${Q})`);
+
+        // 2. Find Involucro
+        const invName = `INVOLUCRO AT ${L}X${H}X${P}`;
+        const inv = db.prepare('SELECT id, verniciati FROM articles WHERE nome = ?').get(invName) as any;
+        if (!inv) throw new Error(`Involucro non trovato: ${invName}`);
+        if (inv.verniciati < Q) throw new Error(`Involucri VERN insufficienti (${inv.verniciati} < ${Q})`);
+
+        // 3. Find Porte
+        const porteTypes = L >= 800 ? ['IB', 'CB'] : ['STD'];
+        const porte = [];
+        for (const type of porteTypes) {
+          const pNameWithSuffix = `PORTA AT ${L}X${H} ${type}`;
+          const pNameWithoutSuffix = `PORTA AT ${L}X${H}`;
+          
+          let p = db.prepare('SELECT id, verniciati FROM articles WHERE nome = ?').get(pNameWithSuffix) as any;
+          let activeName = pNameWithSuffix;
+          
+          if (!p && type === 'STD') {
+            p = db.prepare('SELECT id, verniciati FROM articles WHERE nome = ?').get(pNameWithoutSuffix) as any;
+            activeName = pNameWithoutSuffix;
+          }
+          
+          if (!p) throw new Error(`Porta non trovata: ${pNameWithSuffix}`);
+          if (p.verniciati < Q) throw new Error(`Porte ${activeName} VERN insufficienti (${p.verniciati} < ${Q})`);
+          porte.push({ ...p, nome: activeName });
+        }
+
+        // 4. Find Cassa Completa
+        const cassa = db.prepare('SELECT id, quantita, impegni FROM casse_complete_at WHERE articolo = ?').get(cassaName) as any;
+        if (!cassa) throw new Error(`Cassa completa non trovata in magazzino: ${cassaName}`);
+
+        // Ensure Cassa Completa exists in articles table for movements_log
+        let box_articolo_id = null;
+        const existingBoxArt = db.prepare('SELECT id FROM articles WHERE nome = ?').get(cassaName) as any;
+        if (existingBoxArt) {
+          box_articolo_id = existingBoxArt.id;
+        } else {
+          const stmt = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, verniciati, impegni_clienti, piega, famiglia) VALUES (?, ?, 0, 0, 0, ?)');
+          const info = stmt.run(cassaName, cassaName, 'CASSE COMPLETE AT');
+          box_articolo_id = info.lastInsertRowid;
+          
+          // If INSERT OR IGNORE skipped, we need to find the ID
+          if (!box_articolo_id) {
+            const row = db.prepare('SELECT id FROM articles WHERE codice = ?').get(cassaName) as any;
+            box_articolo_id = row?.id;
+          }
+          
+          if (box_articolo_id) {
+            db.prepare('INSERT OR IGNORE INTO processes (articolo_id, taglio, piega, saldatura, verniciatura) VALUES (?, 0, 0, 0, 0)').run(box_articolo_id);
+          }
+        }
+
+        // Helper to fulfill deficit commitments
+        const fulfillDeficit = (articoloId: number, qty: number, tableName: string, articleName: string) => {
+          const deficitCommitments = db.prepare(`
+            SELECT * FROM commitments 
+            WHERE articolo_id = ? AND note LIKE ? 
+            ORDER BY data_inserimento ASC
+          `).all(articoloId, `%[DEFICIT CASSA ${cassaName}]%`) as any[];
+
+          let remainingToFulfill = qty;
+          let fulfilledQty = 0;
+          for (const comm of deficitCommitments) {
+            if (remainingToFulfill <= 0) break;
+            const fulfillQty = Math.min(remainingToFulfill, comm.quantita);
+            
+            if (fulfillQty === comm.quantita) {
+              db.prepare('DELETE FROM commitments WHERE id = ?').run(comm.id);
+            } else {
+              db.prepare('UPDATE commitments SET quantita = quantita - ? WHERE id = ?').run(fulfillQty, comm.id);
+            }
+            
+            db.prepare('UPDATE articles SET impegni_clienti = MAX(0, impegni_clienti - ?) WHERE id = ?').run(fulfillQty, articoloId);
+            remainingToFulfill -= fulfillQty;
+            fulfilledQty += fulfillQty;
+          }
+          
+          if (fulfilledQty > 0) {
+            db.prepare(`UPDATE ${tableName} SET imp = MAX(0, imp - ?), tot = tot + ? WHERE articolo = ?`).run(fulfilledQty, fulfilledQty, articleName);
+          }
+          
+          return fulfilledQty;
+        };
+
+        // EXECUTE UPDATES
+        // Update Piastra
+        db.prepare('UPDATE processes SET piega = piega - ? WHERE id = ?').run(Q, piastra.process_id);
+        db.prepare('UPDATE piastre_at SET gre = gre - ?, tot = tot - ? WHERE articolo = ?').run(Q, Q, piastraName);
+        fulfillDeficit(piastra.article_id, Q, 'piastre_at', piastraName);
+        
+        // Update Involucro
+        db.prepare('UPDATE articles SET verniciati = verniciati - ? WHERE id = ?').run(Q, inv.id);
+        db.prepare('UPDATE involucro_at SET vern = vern - ?, tot = tot - ? WHERE articolo = ?').run(Q, Q, invName);
+        fulfillDeficit(inv.id, Q, 'involucro_at', invName);
+
+        // Update Porte
+        for (const p of porte) {
+          db.prepare('UPDATE articles SET verniciati = verniciati - ? WHERE id = ?').run(Q, p.id);
+          db.prepare('UPDATE porte_at SET vern = vern - ?, tot = tot - ? WHERE articolo = ?').run(Q, Q, p.nome);
+          fulfillDeficit(p.id, Q, 'porte_at', p.nome);
+        }
+
+        // Update Cassa Completa (Quantita +)
+        const newQty = cassa.quantita + Q;
+        const newTot = newQty - cassa.impegni;
+        db.prepare('UPDATE casse_complete_at SET quantita = ?, totale = ? WHERE id = ?').run(newQty, newTot, cassa.id);
+        
+        // Log assembly
+        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(box_articolo_id, 'Assemblaggio', 'Carico Cassa Completa', Q, 'Sistema', cliente || '', commessa || '', new Date().toISOString());
+      });
+
+      transaction();
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   // Seed Casse AT tables if empty
   const seedCasseAT = () => {
     const piastreCount = db.prepare("SELECT COUNT(*) as count FROM piastre_at WHERE articolo != '' AND articolo IS NOT NULL").get() as any;
-    if (true) { // Force re-seed to apply correct data
+    if (piastreCount.count === 0) { // Only seed if empty
       db.prepare('DELETE FROM piastre_at').run();
       const piastreData = [
         { articolo: 'PIASTRA AT 200X300', codice: 'AT-PA0203' },
@@ -780,10 +1019,8 @@ async function startServer() {
       const insert = db.prepare('INSERT INTO piastre_at (articolo, codice) VALUES (?, ?)');
       for (const p of piastreData) insert.run(p.articolo, p.codice);
       for (let i = piastreData.length; i < 60; i++) insert.run('', '');
-    }
-
-    const porteCount = db.prepare("SELECT COUNT(*) as count FROM porte_at WHERE articolo != '' AND articolo IS NOT NULL").get() as any;
-    if (true) { // Force re-seed to apply correct data
+        const porteCount = db.prepare("SELECT COUNT(*) as count FROM porte_at WHERE articolo != '' AND articolo IS NOT NULL").get() as any;
+    if (porteCount.count === 0) { // Only seed if empty
       db.prepare('DELETE FROM porte_at').run();
       const porteData = [
         { articolo: 'PORTA AT 200X300', codice: 'AT-PO0203' },
@@ -816,11 +1053,69 @@ async function startServer() {
       ];
       const insert = db.prepare('INSERT INTO porte_at (articolo, codice) VALUES (?, ?)');
       for (const p of porteData) insert.run(p.articolo, p.codice);
-      for (let i = porteData.length; i < 100; i++) insert.run('', '');
+      for (let i = porteData.length; i < 60; i++) insert.run('', '');
     }
 
+    // Seed AGLM articles
+    const seedAGLM = () => {
+      const aglmItems = [
+        { baseCodifica: "0610", dimensioni: "600x1000x400" },
+        { baseCodifica: "0810", dimensioni: "800x1000x400" },
+        { baseCodifica: "1010", dimensioni: "1000x1000x400" },
+        { baseCodifica: "1210", dimensioni: "1200x1000x400" },
+        { baseCodifica: "1610", dimensioni: "1600x1000x400" }
+      ];
+      const categories = [
+        { label: "LEGGIO M.", prefix: "AGLM" },
+        { label: "PO AGLM", prefix: "AGLM-PO" },
+        { label: "PIANALE MENS.", prefix: "AGLM" },
+        { label: "RE AGLM", prefix: "AGLM-RE" },
+        { label: "PA AGLM", prefix: "AGLM-PA" },
+        { label: "AGLM COMP.", prefix: "AGLM" }
+      ];
+
+      for (const item of aglmItems) {
+        for (const cat of categories) {
+          const code = `${cat.prefix}${item.baseCodifica}-${item.dimensioni}`;
+          const exists = db.prepare('SELECT id FROM articles WHERE codice = ?').get(code);
+          if (!exists) {
+            const info = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, verniciati, impegni_clienti, piega) VALUES (?, ?, 0, 0, 0)').run(cat.label + ' ' + item.baseCodifica, code);
+            const articolo_id = info.lastInsertRowid || (db.prepare('SELECT id FROM articles WHERE codice = ?').get(code) as any)?.id;
+            if (articolo_id) {
+              db.prepare('INSERT OR IGNORE INTO processes (articolo_id, taglio, piega, saldatura, verniciatura) VALUES (?, 0, 0, 0, 0)').run(articolo_id);
+            }
+          }
+        }
+      }
+    };
+    seedAGLM();
+    
+    // Cleanup and seed AGR-MCR articles
+    try {
+      db.prepare("DELETE FROM articles WHERE codice LIKE 'AGR-MCR%' OR nome LIKE '%MONTANTE CENTRALE RETRO%'").run();
+      
+      const mcrData = [
+        { codice: 'AGR-MCR1600', nome: 'MONTANTE CENTRALE RETRO 1600', tag: 0, gre: 0, ver: 0, imp: 0 },
+        { codice: 'AGR-MCR1800', nome: 'MONTANTE CENTRALE RETRO 1800', tag: 0, gre: 0, ver: 5, imp: 5 },
+        { codice: 'AGR-MCR2000', nome: 'MONTANTE CENTRALE RETRO 2000', tag: 0, gre: 0, ver: 45, imp: 29 },
+        { codice: 'AGR-MCR2200', nome: 'MONTANTE CENTRALE RETRO 2200', tag: 0, gre: 0, ver: 0, imp: 2 },
+        { codice: 'AGR-MCR1000', nome: 'MONTANTE CENTRALE RETRO 1000', tag: 0, gre: 0, ver: 0, imp: 0 }
+      ];
+      
+      for (const item of mcrData) {
+        const info = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, verniciati, impegni_clienti, piega) VALUES (?, ?, ?, ?, ?)').run(item.nome, item.codice, item.ver, item.imp, item.gre);
+        const articolo_id = info.lastInsertRowid || (db.prepare('SELECT id FROM articles WHERE codice = ?').get(item.codice) as any)?.id;
+        if (articolo_id) {
+          db.prepare('INSERT OR IGNORE INTO processes (articolo_id, taglio, piega, saldatura, verniciatura) VALUES (?, ?, ?, 0, ?)').run(articolo_id, item.tag, item.gre, item.ver);
+        }
+      }
+    } catch (e) {
+      console.error('Error cleaning up AGR-MCR:', e);
+    }
+ }
+
     const involucroCount = db.prepare("SELECT COUNT(*) as count FROM involucro_at WHERE articolo != '' AND articolo IS NOT NULL").get() as any;
-    if (true) { // Force re-seed to apply correct data
+    if (involucroCount.count === 0) { // Only seed if empty
       db.prepare('DELETE FROM involucro_at').run();
       const involucroData = [
         { articolo: 'INVOLUCRO AT 200X300X150', codice: 'AT-IN2315' },
@@ -954,6 +1249,7 @@ async function startServer() {
 
   // Processes CRUD
   app.get('/api/processes', (req, res) => {
+    console.log('Fetching processes...');
     try {
       const processes = db.prepare(`
         SELECT p.*, a.nome as articolo_nome, a.codice as articolo_codice 
@@ -961,6 +1257,7 @@ async function startServer() {
         JOIN articles a ON p.articolo_id = a.id
         ORDER BY a.codice ASC
       `).all();
+      console.log(`Fetched ${processes.length} processes.`);
       res.json(processes);
     } catch (error: any) {
       console.error('Error fetching processes:', error);
@@ -1000,14 +1297,30 @@ async function startServer() {
         // Find article by nome or codice
         let article;
         if (nome) {
-          article = db.prepare('SELECT id FROM articles WHERE nome = ? OR codice = ?').get(nome, nome) as any;
+          article = db.prepare('SELECT id FROM articles WHERE nome = ? OR codice = ? OR codice LIKE ?').get(nome, nome, nome + '-%') as any;
         }
 
+        let articolo_id;
         if (!article) {
-          throw new Error(`Articolo non trovato: ${nome}`);
+          console.log(`Articolo non trovato: ${nome}. Creazione in corso...`);
+          const result = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, verniciati, impegni_clienti, piega, scorta, prezzo) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(nome, nome, 0, 0, 0, 0, 0);
+          
+          articolo_id = result.lastInsertRowid;
+          if (!articolo_id) {
+            const row = db.prepare('SELECT id FROM articles WHERE codice = ?').get(nome) as any;
+            articolo_id = row?.id;
+          }
+          
+          if (articolo_id) {
+            db.prepare('INSERT OR IGNORE INTO processes (articolo_id, taglio, piega, saldatura, verniciatura) VALUES (?, ?, ?, ?, ?)')
+              .run(articolo_id, 0, 0, 0, 0);
+          } else {
+            throw new Error(`Impossibile creare l'articolo: ${nome}`);
+          }
+        } else {
+          articolo_id = article.id;
         }
-
-        const articolo_id = article.id;
 
         // Update processes
         const t = parseInt(taglio) || 0;
@@ -1034,8 +1347,8 @@ async function startServer() {
               
               db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(c.quantita, articolo_id);
               
-              db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-                .run(articolo_id, 'impegni_import', 'carico', c.quantita, 'System', c.cliente, c.commessa);
+              db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(articolo_id, 'impegni_import', 'carico', c.quantita, 'System', c.cliente, c.commessa, new Date().toISOString());
             }
           }
         }
@@ -1068,9 +1381,14 @@ async function startServer() {
           // Crea l'articolo se non esiste
           const sc = scorta !== undefined ? parseInt(scorta) || 0 : 0;
           const imp = impegni_clienti !== undefined ? parseInt(impegni_clienti) || 0 : 0;
-          const result = db.prepare('INSERT INTO articles (nome, codice, verniciati, impegni_clienti, piega, scorta, prezzo) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          const result = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, verniciati, impegni_clienti, piega, scorta, prezzo) VALUES (?, ?, ?, ?, ?, ?, ?)')
             .run(nome, nome, 0, imp, 0, sc, 0);
+          
           articolo_id = result.lastInsertRowid;
+          if (!articolo_id) {
+            const row = db.prepare('SELECT id FROM articles WHERE codice = ?').get(nome) as any;
+            articolo_id = row?.id;
+          }
         } else {
           articolo_id = article.id;
           console.log(`Articolo trovato: ${nome} (ID: ${articolo_id})`);
@@ -1125,8 +1443,8 @@ async function startServer() {
               
               totalImpegni += quantita;
 
-              db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-                .run(articolo_id, 'impegni_import', 'carico', quantita, 'System', cliente, commessa);
+              db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(articolo_id, 'impegni_import', 'carico', quantita, 'System', cliente, commessa, new Date().toISOString());
             }
           }
           
@@ -1177,7 +1495,7 @@ async function startServer() {
         SELECT m.*, a.nome as articolo_nome, a.codice as articolo_codice 
         FROM movements_log m 
         JOIN articles a ON m.articolo_id = a.id
-        ORDER BY m.timestamp DESC
+        ORDER BY m.timestamp DESC, m.id DESC
       `).all();
       res.json(movements);
     } catch (error: any) {
@@ -1309,8 +1627,23 @@ async function startServer() {
           const qty = parseInt(m.quantita, 10);
           if (isNaN(qty) || qty < 0) continue;
           
+          let articolo_id = m.articolo_id;
+          if (!articolo_id && m.articolo) {
+            const artRow = db.prepare('SELECT id FROM articles WHERE nome = ? OR codice = ?').get(m.articolo, m.codice || m.articolo) as any;
+            if (artRow) {
+              articolo_id = artRow.id;
+            } else {
+              // Create article if it doesn't exist
+              const result = db.prepare('INSERT INTO articles (nome, codice, verniciati, impegni_clienti, piega, scorta, prezzo) VALUES (?, ?, 0, 0, 0, 0, 0)').run(m.articolo, m.codice || m.articolo);
+              articolo_id = result.lastInsertRowid;
+              db.prepare('INSERT INTO processes (articolo_id, piega, verniciatura) VALUES (?, 0, 0)').run(articolo_id);
+            }
+          }
+
+          if (!articolo_id) continue;
+
           stmt.run(
-            m.articolo_id, 
+            articolo_id, 
             m.fase || '', 
             m.tipo || '', 
             qty, 
@@ -1321,7 +1654,6 @@ async function startServer() {
           );
         }
       });
-
       transaction();
       res.json({ success: true });
     } catch (error: any) {
@@ -1331,13 +1663,19 @@ async function startServer() {
   });
 
   app.post('/api/movements', (req, res) => {
-    const { articolo_id, fase, tipo, quantita, operatore = '', quantita_lanciata, tempo } = req.body;
+    let { articolo_id, fase, tipo, quantita, operatore = '', quantita_lanciata, tempo, timestamp } = req.body;
     try {
       const qty = parseInt(quantita, 10);
       if (isNaN(qty) || qty < 0) throw new Error("Quantità non valida");
 
       const transaction = db.transaction(() => {
-        const executeMovement = (id: string | number, isAuto: boolean = false) => {
+        const executeMovement = (id: string | number, isAuto: boolean = false, overrideTipo?: string, overrideFase?: string, overrideQty?: number) => {
+          const originalTipo = tipo;
+          const originalFase = fase;
+          if (overrideTipo) tipo = overrideTipo;
+          if (overrideFase) fase = overrideFase;
+          const currentQty = overrideQty !== undefined ? overrideQty : qty;
+
           // Fetch current processes
           const procRow = db.prepare(`SELECT * FROM processes WHERE articolo_id = ?`).get(id) as any;
           if (!procRow) throw new Error("Processi non trovati per questo articolo");
@@ -1371,13 +1709,14 @@ async function startServer() {
               if (upperCode.includes('LB')) return 'Laterali Ibridi';
               return 'Laterali';
             }
-            if (upperName.includes('TETTO') && !upperName.includes('STT AGR')) return 'Tetti';
+            if (upperName.includes('TETTO') && !upperName.includes('STT AGR') && !upperName.includes('STRUTTURA AGM') && !upperCode.includes('AGM-TT')) return 'Tetti';
+            if (upperCode.includes('AGM-TT')) return 'Tetti AGM';
             if (upperName.includes('PIASTRA')) {
               if (upperName.includes('LATERALE')) return 'Piastre Laterali';
               return 'Piastre Frontali';
             }
 
-            if (upperName.includes('STRUTTURE AGR') || upperName.includes('STRUTTURA AGR') || upperName.includes('STT AGR') || upperCode.startsWith('AGR-ST') || upperCode.startsWith('AGT-ST') || /^AGR\d{4}$/.test(upperCode)) return 'Strutture Agr';
+            if (upperName.includes('STRUTTURE AGR') || upperName.includes('STRUTTURA AGR') || upperName.includes('STRUTTURE AGM') || upperName.includes('STRUTTURA AGM') || upperName.includes('STT AGR') || upperCode.startsWith('AGR-ST') || upperCode.startsWith('AGT-ST') || /^AGR\d{4}$/.test(upperCode)) return 'Strutture Agr';
             if (upperName.includes('BASI&TETTI') || (upperName.includes('BASI') && upperName.includes('TETTI'))) return 'Basi&Tetti';
             if (upperName.includes('AGS')) return 'AGS';
             if (upperName.includes('AGC')) return 'AGC';
@@ -1397,7 +1736,10 @@ async function startServer() {
           }
           if (fase === 'saldatura') {
             if (tipo === 'carico' && (catLower.includes('porte') || catLower.includes('retri') || catLower.includes('tetti') || catLower.includes('laterali'))) {
-              throw new Error(`Non è possibile aggiungere un carico alla saldatura per ${artRow.nome}. Questi articoli vanno saldati ma vengono registrati solo nel grezzo.`);
+              // Allow AGM components (Fondi, Tetti, Fianchi) even if they match the categories
+              if (!artRow.nome.includes('AGM')) {
+                throw new Error(`Non è possibile aggiungere un carico alla saldatura per ${artRow.nome}. Questi articoli vanno saldati ma vengono registrati solo nel grezzo.`);
+              }
             }
           }
 
@@ -1405,7 +1747,7 @@ async function startServer() {
 
           const isTaglioEnabled = (cat: string) => {
             const c = cat.toLowerCase();
-            if (c.includes('strutture agr') || c.includes('involucri at')) {
+            if (c.includes('strutture agr') || c.includes('agc') || c.includes('strutture agm')) {
               return false;
             }
             return true;
@@ -1421,11 +1763,81 @@ async function startServer() {
 
           const isGrezzoEnabled = (cat: string) => {
             const c = cat.toLowerCase();
-            if (c.includes('strutture agr') || c.includes('involucri at')) {
+            if (c.includes('strutture agr') || c.includes('agc') || c.includes('strutture agm')) {
               return false;
             }
             return true;
           };
+
+          // Deduct traverses if it's an AGR component
+          if (category === 'Strutture Agr' && fase === 'saldatura') {
+              const isSaldatura = (tipo === 'carico' || tipo === 'CARICO COMP. AGR');
+              const isReturn = (tipo === 'scarico' || tipo === 'SCARICO COMP. AGR');
+
+              if (isSaldatura || isReturn) {
+                  const match = artRow.codice.match(/^AGR-(STB|STT)(\d{2})(\d{2})$/);
+                  if (match) {
+                      const [_, type, wStr, hStr] = match;
+                      const w = parseInt(wStr) * 100;
+                      const h = parseInt(hStr) * 100;
+                      
+                      const requirements = [];
+                      if (type === 'STB') {
+                          // AGR-STB: 2 forate (W) and 2 cieche (H)
+                          requirements.push({ tipo: 'forata', misura: w, q: currentQty * 2 });
+                          requirements.push({ tipo: 'cieca', misura: h, q: currentQty * 2 });
+                      } else if (type === 'STT') {
+                          // AGR-STT: 2 tetto (W) and 2 tetto (H)
+                          requirements.push({ tipo: 'tetto', misura: w, q: currentQty * 2 });
+                          requirements.push({ tipo: 'tetto', misura: h, q: currentQty * 2 });
+                      }
+
+                      for (const req of requirements) {
+                          if (isSaldatura) {
+                              db.prepare('INSERT INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, ?) ON CONFLICT(tipo, misura) DO UPDATE SET quantita = quantita - ?').run(req.tipo, req.misura, -req.q, req.q);
+                              db.prepare('INSERT INTO movimenti_traverse (tipo_traversa, misura, quantita, tipo_movimento, origine, riferimento) VALUES (?, ?, ?, ?, ?, ?)')
+                                .run(req.tipo, req.misura, req.q, 'scarico', 'automatico', artRow.codice);
+                          } else {
+                              db.prepare('INSERT INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, ?) ON CONFLICT(tipo, misura) DO UPDATE SET quantita = quantita + ?').run(req.tipo, req.misura, req.q, req.q);
+                              db.prepare('INSERT INTO movimenti_traverse (tipo_traversa, misura, quantita, tipo_movimento, origine, riferimento) VALUES (?, ?, ?, ?, ?, ?)')
+                                .run(req.tipo, req.misura, req.q, 'carico', 'automatico', artRow.codice);
+                          }
+                      }
+                  }
+              }
+          }
+
+          // Deduct traverses if it's an AGS component
+          if (category === 'AGS' && fase === 'saldatura') {
+              const isSaldatura = (tipo === 'carico');
+              const isReturn = (tipo === 'scarico');
+
+              if (isSaldatura || isReturn) {
+                  // AGS format: STRUTTURA AGS 600X1600X400
+                  const match = artRow.nome.match(/(\d+)X(\d+)X(\d+)/);
+                  if (match) {
+                      const lunghezza = parseInt(match[1]);
+                      const profondita = parseInt(match[3]);
+                      
+                      const requirements = [
+                          { tipo: 'forata', misura: lunghezza, q: currentQty * 2 },
+                          { tipo: 'TRA. LAT. AGS', misura: profondita, q: currentQty * 2 }
+                      ];
+
+                      for (const req of requirements) {
+                          if (isSaldatura) {
+                              db.prepare('INSERT INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, ?) ON CONFLICT(tipo, misura) DO UPDATE SET quantita = quantita - ?').run(req.tipo, req.misura, -req.q, req.q);
+                              db.prepare('INSERT INTO movimenti_traverse (tipo_traversa, misura, quantita, tipo_movimento, origine, riferimento) VALUES (?, ?, ?, ?, ?, ?)')
+                                .run(req.tipo, req.misura, req.q, 'scarico', 'automatico', artRow.codice);
+                          } else {
+                              db.prepare('INSERT INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, ?) ON CONFLICT(tipo, misura) DO UPDATE SET quantita = quantita + ?').run(req.tipo, req.misura, req.q, req.q);
+                              db.prepare('INSERT INTO movimenti_traverse (tipo_traversa, misura, quantita, tipo_movimento, origine, riferimento) VALUES (?, ?, ?, ?, ?, ?)')
+                                .run(req.tipo, req.misura, req.q, 'carico', 'automatico', artRow.codice);
+                          }
+                      }
+                  }
+              }
+          }
 
           const taglioEnabled = isTaglioEnabled(category);
           const saldaturaEnabled = isSaldaturaEnabled(category);
@@ -1433,98 +1845,67 @@ async function startServer() {
 
           let prevVal = 0;
           let prevFase = null;
-          if (tipo === 'carico') {
+          if (tipo === 'carico' || tipo === 'CARICO COMP. AGM' || tipo === 'CARICO COMP. AGR') {
               if (fase === 'taglio' || fase === 'Tagliato - Carico da Macchina 5000') {
-                  taglio += qty;
+                  taglio += currentQty;
               } else if (fase === 'piega') {
-                  piega += qty;
-                  if (taglioEnabled) {
-                      taglio -= qty; // Grezzo -> Tagliato
+                  piega += currentQty;
+                  if (taglioEnabled && tipo === 'carico') {
+                      taglio -= currentQty; // Grezzo -> Tagliato
                       prevFase = 'taglio';
                   }
               } else if (fase === 'saldatura') {
-                  saldatura += qty;
-                  if (saldaturaEnabled) {
+                  saldatura += currentQty;
+                  if (saldaturaEnabled && !artRow.nome.includes('AGM')) {
                       if (grezzoEnabled) {
-                          piega -= qty; // Saldatura -> Grezzo
+                          piega -= currentQty; // Saldatura -> Grezzo
                           prevFase = 'piega';
-                      } else {
+                      } else if (!category.toLowerCase().includes('strutture agr')) {
                           // If grezzo is disabled, subtract from piega directly
-                          piega -= qty;
+                          piega -= currentQty;
                           prevFase = 'piega';
-                      }
-                  }
-
-                  // Deduct traverses if it's an AGR structure
-                  if (category === 'Strutture Agr' && /^AGR(\d{2})(\d{2})$/.test(artRow.codice)) {
-                      const match = artRow.codice.match(/^AGR(\d{2})(\d{2})$/);
-                      if (match) {
-                          const w = parseInt(match[1]) * 100;
-                          const h = parseInt(match[2]) * 100;
-                          const needed = [
-                              { tipo: 'forata', misura: w, q: qty * 2 },
-                              { tipo: 'cieca', misura: h, q: qty * 2 },
-                              { tipo: 'tetto1', misura: w, q: qty * 2 },
-                              { tipo: 'tetto2', misura: h, q: qty * 2 }
-                          ];
-                          
-                          for (const item of needed) {
-                              const inv = db.prepare('SELECT quantita FROM traverse_inventory WHERE tipo = ? AND misura = ?').get(item.tipo, item.misura) as any;
-                              if (!inv || inv.quantita < item.q) throw new Error(`Traverse insufficienti: ${item.tipo} ${item.misura}`);
-                          }
-                          
-                          for (const item of needed) {
-                              db.prepare('UPDATE traverse_inventory SET quantita = quantita - ? WHERE tipo = ? AND misura = ?').run(item.q, item.tipo, item.misura);
-                          }
                       }
                   }
               } else if (fase === 'verniciatura') {
-                  verniciatura += qty;
-                  verniciati += qty;
+                  verniciatura += currentQty;
+                  verniciati += currentQty;
                   if (saldaturaEnabled) {
-                      saldatura -= qty; // Verniciato -> Saldatura
+                      saldatura -= currentQty; // Verniciato -> Saldatura
                       prevFase = 'saldatura';
                   } else if (grezzoEnabled) {
-                      piega -= qty; // Verniciato -> Grezzo
+                      piega -= currentQty; // Verniciato -> Grezzo
                       prevFase = 'piega';
                   }
               } else if (fase === 'impegni') {
-                  impegni_clienti += qty;
+                  impegni_clienti += currentQty;
               }
-          } else if (tipo === 'scarico') {
-              if (fase === 'taglio') taglio -= qty;
-              else if (fase === 'piega') piega -= qty;
-              else if (fase === 'saldatura') {
-                  saldatura -= qty;
-                  // Add back traverses if it's an AGR structure
-                  if (category === 'Strutture Agr' && /^AGR(\d{2})(\d{2})$/.test(artRow.codice)) {
-                      const match = artRow.codice.match(/^AGR(\d{2})(\d{2})$/);
-                      if (match) {
-                          const w = parseInt(match[1]) * 100;
-                          const h = parseInt(match[2]) * 100;
-                          const needed = [
-                              { tipo: 'forata', misura: w, q: qty * 2 },
-                              { tipo: 'cieca', misura: h, q: qty * 2 },
-                              { tipo: 'tetto1', misura: w, q: qty * 2 },
-                              { tipo: 'tetto2', misura: h, q: qty * 2 }
-                          ];
-                          for (const item of needed) {
-                              db.prepare('UPDATE traverse_inventory SET quantita = quantita + ? WHERE tipo = ? AND misura = ?').run(item.q, item.tipo, item.misura);
-                          }
-                      }
+          } else if (tipo === 'scarico' || tipo === 'SCARICO COMP. AGM' || tipo === 'SCARICO COMP. AGR') {
+              if (fase === 'taglio') {
+                  taglio -= currentQty;
+              } else if (fase === 'piega') {
+                  piega -= currentQty;
+                  if (taglioEnabled && tipo === 'scarico') taglio += currentQty;
+              } else if (fase === 'saldatura') {
+                  saldatura -= currentQty;
+                  if (saldaturaEnabled && !artRow.nome.includes('AGM') && tipo === 'scarico' && !category.toLowerCase().includes('strutture agr')) {
+                      piega += currentQty;
+                  }
+              } else if (fase === 'verniciatura') {
+                  verniciatura -= currentQty;
+                  verniciati -= currentQty;
+                  if (saldaturaEnabled && tipo === 'scarico') {
+                      saldatura += currentQty;
+                  } else if (grezzoEnabled && tipo === 'scarico') {
+                      piega += currentQty;
                   }
               }
-              else if (fase === 'verniciatura') {
-                  verniciatura -= qty;
-                  verniciati -= qty;
-              }
-              else if (fase === 'impegni') impegni_clienti -= qty;
+              else if (fase === 'impegni') impegni_clienti -= currentQty;
           } else if (tipo === 'rettifica') {
-              if (fase === 'taglio') { prevVal = taglio; taglio = qty; }
-              else if (fase === 'piega') { prevVal = piega; piega = qty; }
-              else if (fase === 'saldatura') { prevVal = saldatura; saldatura = qty; }
-              else if (fase === 'verniciatura') { prevVal = verniciatura; verniciatura = qty; verniciati = qty; }
-              else if (fase === 'impegni') { prevVal = impegni_clienti; impegni_clienti = qty; }
+              if (fase === 'taglio') { prevVal = taglio; taglio = currentQty; }
+              else if (fase === 'piega') { prevVal = piega; piega = currentQty; }
+              else if (fase === 'saldatura') { prevVal = saldatura; saldatura = currentQty; }
+              else if (fase === 'verniciatura') { prevVal = verniciatura; verniciatura = currentQty; verniciati = currentQty; }
+              else if (fase === 'impegni') { prevVal = impegni_clienti; impegni_clienti = currentQty; }
           }
 
           // Update processes
@@ -1534,6 +1915,25 @@ async function startServer() {
           // Update articles
           db.prepare(`UPDATE articles SET verniciati = ?, impegni_clienti = ?, piega = ? WHERE id = ?`)
             .run(verniciati, impegni_clienti, piega, id);
+
+          // Update Casse AT component tables if applicable
+          if (fase === 'impegni') {
+            const cat = getCategory(artRow.nome, artRow.codice);
+            if (tipo === 'carico') {
+              if (cat === 'PIASTRE AT') db.prepare('UPDATE piastre_at SET imp = imp + ?, tot = tot - ? WHERE articolo = ?').run(currentQty, currentQty, artRow.nome);
+              if (cat === 'PORTE AT') db.prepare('UPDATE porte_at SET imp = imp + ?, tot = tot - ? WHERE articolo = ?').run(currentQty, currentQty, artRow.nome);
+              if (cat === 'INVOLUCRI AT') db.prepare('UPDATE involucro_at SET imp = imp + ?, tot = tot - ? WHERE articolo = ?').run(currentQty, currentQty, artRow.nome);
+            } else if (tipo === 'scarico') {
+              if (cat === 'PIASTRE AT') db.prepare('UPDATE piastre_at SET imp = MAX(0, imp - ?), tot = tot + ? WHERE articolo = ?').run(currentQty, currentQty, artRow.nome);
+              if (cat === 'PORTE AT') db.prepare('UPDATE porte_at SET imp = MAX(0, imp - ?), tot = tot + ? WHERE articolo = ?').run(currentQty, currentQty, artRow.nome);
+              if (cat === 'INVOLUCRI AT') db.prepare('UPDATE involucro_at SET imp = MAX(0, imp - ?), tot = tot + ? WHERE articolo = ?').run(currentQty, currentQty, artRow.nome);
+            }
+          }
+
+          // Clear production alerts if a movement is registered
+          if (tipo === 'carico' && (fase === 'verniciatura' || fase === 'saldatura')) {
+            db.prepare("UPDATE production_alerts SET stato = 'completed' WHERE articolo = ? AND stato = 'pending'").run(artRow.nome);
+          }
 
           // Log the movement
           let logFase = isAuto ? `AUTO (${fase})` : fase;
@@ -1545,28 +1945,62 @@ async function startServer() {
           }
           const logTipo = tipo === 'scarico' ? 'scarico da commessa' : tipo;
 
-          db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, quantita_lanciata, tempo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(id, logFase, logTipo, qty, operatore, req.body.cliente || null, req.body.commessa || null, quantita_lanciata || null, tempo || null);
+          db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, quantita_lanciata, tempo, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(id, logFase, logTipo, currentQty, operatore, req.body.cliente || null, req.body.commessa || null, quantita_lanciata || null, tempo || null, timestamp);
 
           // Log automatic scarico from previous phase if applicable
           if (prevFase) {
-            db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, quantita_lanciata, tempo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-              .run(id, prevFase, 'scarico', qty, operatore, req.body.cliente || null, req.body.commessa || null, quantita_lanciata || null, null);
+            db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, quantita_lanciata, tempo, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(id, prevFase, 'scarico', currentQty, operatore, req.body.cliente || null, req.body.commessa || null, quantita_lanciata || null, null, timestamp);
           }
 
-          // Sync components if it's a master AGR article
-          if (!isAuto && /^AGR\d{4}$/.test(artRow.codice)) {
-            const misura = artRow.codice.replace('AGR', '');
-            const componentCodes = [`AGR-STB${misura}`, `AGR-STT${misura}`];
-            
-            for (const compCode of componentCodes) {
-              const compArt = db.prepare('SELECT id FROM articles WHERE codice = ?').get(compCode) as any;
-              if (compArt) {
-                executeMovement(compArt.id, true);
+          // Sync components if it's a master AGM structure
+          if (!isAuto && artRow.nome.includes('AGM') && artRow.codice.includes('AGM') && fase === 'saldatura') {
+            const match = artRow.codice.match(/AGM(\d{2})(\d{2})(\d{2})/);
+            if (match) {
+              const [_, larg, prof, spess] = match;
+              
+              const componentCodes = [
+                { code: `AGM-FO${larg}${spess}`, qty: 1 },
+                { code: `AGM-TT${larg}${spess}`, qty: 1 },
+                { code: `AGM${prof}${spess}PL`, qty: 2 }
+              ];
+              
+              for (const comp of componentCodes) {
+                const compArt = db.prepare('SELECT id FROM articles WHERE codice = ?').get(comp.code) as any;
+                if (compArt) {
+                  const compTipo = tipo === 'carico' ? 'SCARICO COMP. AGM' : 'CARICO COMP. AGM';
+                  executeMovement(compArt.id, true, compTipo, 'piega', currentQty * comp.qty);
+                } else {
+                  console.error(`Component not found: ${comp.code}`);
+                }
               }
             }
           }
+          tipo = originalTipo;
+          fase = originalFase;
         };
+
+        const artRow = db.prepare('SELECT * FROM articles WHERE id = ?').get(articolo_id) as any;
+        if (!artRow) throw new Error('Articolo non trovato');
+
+        // Split logic for master AGR structures
+        if (artRow.codice.startsWith('AGR') && !artRow.codice.startsWith('AGR-') && tipo === 'carico' && fase === 'saldatura') {
+          const halfQty = Math.floor(qty / 2);
+          if (halfQty > 0) {
+            const baseCode = artRow.codice.replace('AGR', 'AGR-STB');
+            const tettoCode = artRow.codice.replace('AGR', 'AGR-STT');
+            
+            const baseArt = db.prepare('SELECT id FROM articles WHERE codice = ?').get(baseCode) as any;
+            const tettoArt = db.prepare('SELECT id FROM articles WHERE codice = ?').get(tettoCode) as any;
+            
+            if (baseArt && tettoArt) {
+              executeMovement(baseArt.id, true, 'carico', 'saldatura', halfQty);
+              executeMovement(tettoArt.id, true, 'carico', 'saldatura', halfQty);
+              return; // Master AGR structure itself is not loaded, only its components
+            }
+          }
+        }
 
         executeMovement(articolo_id);
       });
@@ -1607,12 +2041,20 @@ async function startServer() {
         const info = stmt.run(articolo_id, cliente, commessa, qty, priorita, fase_produzione, operatore, note, stato_lavorazione);
         newCommitmentId = info.lastInsertRowid;
         
-        // Update total impegni in articles
-        db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(qty, articolo_id);
+        // Update total impegni in articles only if it's the "final" phase for that article type
+        const article = db.prepare('SELECT nome FROM articles WHERE id = ?').get(articolo_id) as any;
+        const isPiastra = article?.nome?.toUpperCase().includes('PIASTRA');
+        const isFinal = isPiastra 
+          ? ['Grezzo', 'Piega', 'Generico'].includes(fase_produzione) 
+          : ['Verniciatura', 'Generico'].includes(fase_produzione);
+
+        if (isFinal) {
+          db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(qty, articolo_id);
+        }
 
         // Log the movement
-        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(articolo_id, fase_produzione, 'Carico Commessa', qty, operatore, cliente, commessa);
+        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(articolo_id, fase_produzione, 'Carico Commessa', qty, operatore, cliente, commessa, new Date().toISOString());
 
         return newCommitmentId;
       });
@@ -1620,6 +2062,21 @@ async function startServer() {
       const id = transaction();
       
       res.json({ id, success: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.patch('/api/articles/:id/toggle-block', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const article = db.prepare('SELECT is_blocked FROM articles WHERE id = ?').get(id) as any;
+      if (!article) throw new Error("Articolo non trovato");
+      
+      const newStatus = article.is_blocked ? 0 : 1;
+      db.prepare('UPDATE articles SET is_blocked = ? WHERE id = ?').run(newStatus, id);
+      
+      res.json({ success: true, is_blocked: newStatus });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -1643,33 +2100,162 @@ async function startServer() {
               articolo_id = existing.id;
             } else {
               // Create new article
-              const stmt = db.prepare('INSERT INTO articles (nome, codice, verniciati, impegni_clienti, piega) VALUES (?, ?, 0, 0, 0)');
+              const stmt = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, verniciati, impegni_clienti, piega) VALUES (?, ?, 0, 0, 0)');
               const info = stmt.run(codice_articolo, codice_articolo);
               articolo_id = info.lastInsertRowid;
               
-              // Initialize processes
-              db.prepare('INSERT INTO processes (articolo_id, taglio, piega, saldatura, verniciatura) VALUES (?, 0, 0, 0, 0)')
-                .run(articolo_id);
+              if (!articolo_id) {
+                const row = db.prepare('SELECT id FROM articles WHERE codice = ?').get(codice_articolo) as any;
+                articolo_id = row?.id;
+              }
+              
+              if (articolo_id) {
+                // Initialize processes
+                db.prepare('INSERT OR IGNORE INTO processes (articolo_id, taglio, piega, saldatura, verniciatura) VALUES (?, 0, 0, 0, 0)')
+                  .run(articolo_id);
+              }
             }
           }
 
-          if (!articolo_id) continue;
+          if (!articolo_id && !is_cassa_completa) continue;
 
-          // Create commitment
-          db.prepare('INSERT INTO commitments (articolo_id, cliente, commessa, quantita, priorita, fase_produzione, operatore, note, stato_lavorazione) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            .run(articolo_id, cliente, commessa, qty, priorita, fase_produzione, operatore, note, stato_lavorazione);
-          
           if (is_cassa_completa && cassa_id) {
-            // Update casse_complete_at
-            db.prepare(`UPDATE casse_complete_at SET impegni = impegni + ?, totale = totale - ? WHERE id = ?`).run(qty, qty, cassa_id);
-          } else {
-            // Update total impegni in articles
-            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(qty, articolo_id);
-          }
+            // Ensure article exists for the box
+            let box_articolo_id = null;
+            const existingBoxArt = db.prepare('SELECT id FROM articles WHERE codice = ?').get(codice_articolo) as any;
+            if (existingBoxArt) {
+              box_articolo_id = existingBoxArt.id;
+            } else {
+              const stmt = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, verniciati, impegni_clienti, piega, famiglia) VALUES (?, ?, 0, 0, 0, ?)');
+              const info = stmt.run(codice_articolo, codice_articolo, 'CASSE COMPLETE AT');
+              box_articolo_id = info.lastInsertRowid;
+              
+              if (!box_articolo_id) {
+                const row = db.prepare('SELECT id FROM articles WHERE codice = ?').get(codice_articolo) as any;
+                box_articolo_id = row?.id;
+              }
+              
+              if (box_articolo_id) {
+                db.prepare('INSERT OR IGNORE INTO processes (articolo_id, taglio, piega, saldatura, verniciatura) VALUES (?, 0, 0, 0, 0)').run(box_articolo_id);
+              }
+            }
 
-          // Log the movement
-          db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-            .run(articolo_id, fase_produzione, 'Carico Commessa', qty, operatore, cliente, commessa);
+            // Get current stock
+            const cassa = db.prepare('SELECT * FROM casse_complete_at WHERE id = ?').get(cassa_id) as any;
+            if (!cassa) continue;
+
+            const disponibile = Math.max(0, cassa.quantita - cassa.impegni);
+            const deficit = qty > disponibile ? qty - disponibile : 0;
+
+            // 1. Create FULL commitment for the box (this will show negative totale if deficit > 0)
+            db.prepare('INSERT INTO commitments (articolo_id, cliente, commessa, quantita, priorita, fase_produzione, operatore, note, stato_lavorazione) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+              .run(box_articolo_id, cliente, commessa, qty, priorita, 'Cassa Completa', operatore, `[CASSA AT] ${note}`, stato_lavorazione);
+            
+            // Update casse_complete_at impegni
+            db.prepare(`UPDATE casse_complete_at SET impegni = impegni + ?, totale = totale - ? WHERE id = ?`).run(qty, qty, cassa_id);
+            
+            // Log the movement for the box
+            db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(box_articolo_id, 'Cassa Completa', 'Carico Commessa', qty, operatore, cliente, commessa, new Date().toISOString());
+
+            if (deficit > 0) {
+              // REALLOCATION LOGIC (Create component requirements)
+              const dims = parseCassaDimensions(cassa.articolo);
+              if (dims) {
+                const { L, H, P } = dims;
+                
+                // 1. Piastra
+                const piastraName = `PIASTRA AT ${L}X${H}`;
+                const piastra = db.prepare('SELECT a.id, a.piega FROM articles a WHERE a.nome = ?').get(piastraName) as any;
+                if (piastra) {
+                  db.prepare('INSERT INTO commitments (articolo_id, cliente, commessa, quantita, priorita, fase_produzione, operatore, note, stato_lavorazione) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                    .run(piastra.id, cliente, commessa, deficit, priorita, 'Grezzo', operatore, `[DEFICIT CASSA ${cassa.articolo}] ${note}`, stato_lavorazione);
+                  db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(deficit, piastra.id);
+                  db.prepare(`UPDATE piastre_at SET imp = imp + ?, tot = tot - ? WHERE articolo = ?`).run(deficit, deficit, piastraName);
+                  db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                    .run(piastra.id, 'Grezzo', 'Carico Commessa (Deficit)', deficit, operatore, cliente, commessa, new Date().toISOString());
+                  
+                  // Send to Fase Taglio only if not available raw (piega)
+                  if (piastra.piega < deficit) {
+                    db.prepare('INSERT INTO fase_taglio (lavorazione_per, articolo, quantita, data, commessa) VALUES (?, ?, ?, ?, ?)')
+                      .run(cliente, piastraName, deficit - piastra.piega, new Date().toLocaleDateString('it-IT'), commessa);
+                  }
+                }
+
+                // 2. Involucro
+                const invName = `INVOLUCRO AT ${L}X${H}X${P}`;
+                const inv = db.prepare('SELECT a.id, a.verniciati, p.saldatura, p.taglio FROM articles a JOIN processes p ON a.id = p.articolo_id WHERE a.nome = ?').get(invName) as any;
+                if (inv) {
+                  db.prepare('INSERT INTO commitments (articolo_id, cliente, commessa, quantita, priorita, fase_produzione, operatore, note, stato_lavorazione) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                    .run(inv.id, cliente, commessa, deficit, priorita, 'Verniciatura', operatore, `[DEFICIT CASSA ${cassa.articolo}] ${note}`, stato_lavorazione);
+                  db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(deficit, inv.id);
+                  db.prepare(`UPDATE involucro_at SET imp = imp + ?, tot = tot - ? WHERE articolo = ?`).run(deficit, deficit, invName);
+                  db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                    .run(inv.id, 'Verniciatura', 'Carico Commessa (Deficit)', deficit, operatore, cliente, commessa, new Date().toISOString());
+
+                  if (inv.verniciati < deficit) {
+                    if (inv.saldatura >= deficit || inv.taglio >= deficit) {
+                      // Trigger Popup for Luca/Roberto
+                      db.prepare('INSERT INTO production_alerts (tipo, articolo, quantita, cliente, commessa, azione_richiesta) VALUES (?, ?, ?, ?, ?, ?)')
+                        .run('INVOLUCRO_WIP', invName, deficit, cliente, commessa, 'Piegare / Saldare / Verniciare');
+                    } else {
+                      // Send to Fase Taglio
+                      db.prepare('INSERT INTO fase_taglio (lavorazione_per, articolo, quantita, data, commessa) VALUES (?, ?, ?, ?, ?)')
+                        .run(cliente, invName, deficit, new Date().toLocaleDateString('it-IT'), commessa);
+                    }
+                  }
+                }
+
+                // 3. Porte
+                const porteTypes = L >= 800 ? ['IB', 'CB'] : ['STD'];
+                for (const type of porteTypes) {
+                  const pNameWithSuffix = `PORTA AT ${L}X${H} ${type}`;
+                  const pNameWithoutSuffix = `PORTA AT ${L}X${H}`;
+                  
+                  let p = db.prepare('SELECT a.id, a.verniciati, a.piega FROM articles a WHERE a.nome = ?').get(pNameWithSuffix) as any;
+                  let activeName = pNameWithSuffix;
+                  
+                  if (!p && type === 'STD') {
+                    p = db.prepare('SELECT a.id, a.verniciati, a.piega FROM articles a WHERE a.nome = ?').get(pNameWithoutSuffix) as any;
+                    activeName = pNameWithoutSuffix;
+                  }
+                  
+                  if (p) {
+                    db.prepare('INSERT INTO commitments (articolo_id, cliente, commessa, quantita, priorita, fase_produzione, operatore, note, stato_lavorazione) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                      .run(p.id, cliente, commessa, deficit, priorita, 'Verniciatura', operatore, `[DEFICIT CASSA ${cassa.articolo}] ${note}`, stato_lavorazione);
+                    db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(deficit, p.id);
+                    db.prepare(`UPDATE porte_at SET imp = imp + ?, tot = tot - ? WHERE articolo = ?`).run(deficit, deficit, activeName);
+                    db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                      .run(p.id, 'Verniciatura', 'Carico Commessa (Deficit)', deficit, operatore, cliente, commessa, new Date().toISOString());
+
+                    // Send to Fase Taglio only if not available raw or painted
+                    if (p.verniciati < deficit && p.piega < deficit) {
+                      db.prepare('INSERT INTO fase_taglio (lavorazione_per, articolo, quantita, data, commessa) VALUES (?, ?, ?, ?, ?)')
+                        .run(cliente, activeName, deficit, new Date().toLocaleDateString('it-IT'), commessa);
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            if (!articolo_id) continue;
+            // Update total impegni in articles only if it's the "final" phase for that article type
+            const article = db.prepare('SELECT nome FROM articles WHERE id = ?').get(articolo_id) as any;
+            const isPiastra = article?.nome?.toUpperCase().includes('PIASTRA');
+            const isFinal = isPiastra 
+              ? ['Grezzo', 'Piega', 'Generico'].includes(fase_produzione) 
+              : ['Verniciatura', 'Generico'].includes(fase_produzione);
+
+            if (isFinal) {
+              db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(qty, articolo_id);
+            }
+            // Create commitment
+            db.prepare('INSERT INTO commitments (articolo_id, cliente, commessa, quantita, priorita, fase_produzione, operatore, note, stato_lavorazione) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+              .run(articolo_id, cliente, commessa, qty, priorita, fase_produzione, operatore, note, stato_lavorazione);
+            // Log the movement
+            db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(articolo_id, fase_produzione, 'Carico Commessa', qty, operatore, cliente, commessa, new Date().toISOString());
+          }
         }
       });
 
@@ -1706,15 +2292,45 @@ async function startServer() {
         const newArticoloId = articolo_id || oldCommitment.articolo_id;
         const articleChanged = newArticoloId !== oldCommitment.articolo_id;
 
+        const oldArt = db.prepare('SELECT nome FROM articles WHERE id = ?').get(oldCommitment.articolo_id) as any;
+        const isOldPiastra = oldArt?.nome?.toUpperCase().includes('PIASTRA');
+        const isOldFinal = isOldPiastra 
+          ? ['Grezzo', 'Piega', 'Generico'].includes(oldCommitment.fase_produzione) 
+          : ['Verniciatura', 'Generico'].includes(oldCommitment.fase_produzione);
+
         if (articleChanged && oldCommitment.stato_lavorazione !== 'Completato') {
-          // Remove old quantity from old article
-          db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(oldCommitment.quantita, oldCommitment.articolo_id);
-          // Add new quantity to new article
-          db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(newQty, newArticoloId);
+          // Remove old quantity from old article if it was a final phase
+          if (isOldFinal) {
+            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(oldCommitment.quantita, oldCommitment.articolo_id);
+          }
+          // Add new quantity to new article if it's a final phase
+          const newArt = db.prepare('SELECT nome FROM articles WHERE id = ?').get(newArticoloId) as any;
+          const isNewPiastra = newArt?.nome?.toUpperCase().includes('PIASTRA');
+          const currentFase = fase_produzione || oldCommitment.fase_produzione;
+          const isNewFinal = isNewPiastra 
+            ? ['Grezzo', 'Piega', 'Generico'].includes(currentFase) 
+            : ['Verniciatura', 'Generico'].includes(currentFase);
+
+          if (isNewFinal) {
+            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(newQty, newArticoloId);
+          }
         } else if (!articleChanged && oldCommitment.stato_lavorazione !== 'Completato') {
-          const qtyDiff = newQty - oldCommitment.quantita;
-          if (qtyDiff !== 0) {
-            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(qtyDiff, oldCommitment.articolo_id);
+          const oldFase = oldCommitment.fase_produzione;
+          const newFase = fase_produzione || oldFase;
+          
+          const isNewFinal = isOldPiastra 
+            ? ['Grezzo', 'Piega', 'Generico'].includes(newFase) 
+            : ['Verniciatura', 'Generico'].includes(newFase);
+
+          if (isOldFinal && isNewFinal) {
+            const qtyDiff = newQty - oldCommitment.quantita;
+            if (qtyDiff !== 0) {
+              db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(qtyDiff, oldCommitment.articolo_id);
+            }
+          } else if (!isOldFinal && isNewFinal) {
+            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti + ? WHERE id = ?`).run(newQty, oldCommitment.articolo_id);
+          } else if (isOldFinal && !isNewFinal) {
+            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(oldCommitment.quantita, oldCommitment.articolo_id);
           }
         }
 
@@ -1759,7 +2375,49 @@ async function startServer() {
         if (!fullCommitment) throw new Error("Impegno non trovato");
 
         if (fullCommitment.stato_lavorazione !== 'Completato') {
-          db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(fullCommitment.quantita, fullCommitment.articolo_id);
+          const isPiastra = fullCommitment.articolo_nome?.toUpperCase().includes('PIASTRA');
+          const isFinal = isPiastra 
+            ? ['Grezzo', 'Piega', 'Generico'].includes(fullCommitment.fase_produzione) 
+            : ['Verniciatura', 'Generico'].includes(fullCommitment.fase_produzione);
+
+          if (isFinal) {
+            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(fullCommitment.quantita, fullCommitment.articolo_id);
+          }
+
+          // Case: it was a primary commitment for a full box
+          if (fullCommitment.fase_produzione === 'Cassa Completa' || fullCommitment.note?.includes('[CASSA AT]')) {
+            // Find component requirements that were created due to this specific cassa and client/commessa
+            const related = db.prepare(`
+              SELECT c.*, a.nome as art_nome FROM commitments c
+              JOIN articles a ON c.articolo_id = a.id
+              WHERE c.note LIKE ? AND c.cliente = ? AND c.commessa = ?
+            `).all(`%[DEFICIT CASSA ${fullCommitment.articolo_nome}]%`, fullCommitment.cliente, fullCommitment.commessa) as any[];
+
+            for (const rel of related) {
+              const relIsPiastra = rel.art_nome?.toUpperCase().includes('PIASTRA');
+              const relIsFinal = relIsPiastra 
+                ? ['Grezzo', 'Piega', 'Generico'].includes(rel.fase_produzione) 
+                : ['Verniciatura', 'Generico'].includes(rel.fase_produzione);
+
+              if (relIsFinal) {
+                db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(rel.quantita, rel.articolo_id);
+              }
+              db.prepare('DELETE FROM commitments WHERE id = ?').run(rel.id);
+
+              // Update the specific _at table if it's one of ours
+              if (rel.art_nome.includes('PIASTRA AT')) {
+                db.prepare(`UPDATE piastre_at SET imp = MAX(0, imp - ?), tot = tot + ? WHERE articolo = ?`).run(rel.quantita, rel.quantita, rel.art_nome);
+              } else if (rel.art_nome.includes('PORTA AT')) {
+                db.prepare(`UPDATE porte_at SET imp = MAX(0, imp - ?), tot = tot + ? WHERE articolo = ?`).run(rel.quantita, rel.quantita, rel.art_nome);
+              } else if (rel.art_nome.includes('INVOLUCRO AT')) {
+                db.prepare(`UPDATE involucro_at SET imp = MAX(0, imp - ?), tot = tot + ? WHERE articolo = ?`).run(rel.quantita, rel.quantita, rel.art_nome);
+              }
+            }
+
+            // Also update casse_complete_at if applicable
+            db.prepare(`UPDATE casse_complete_at SET impegni = MAX(0, impegni - ?), totale = totale + ? WHERE articolo = ?`)
+              .run(fullCommitment.quantita, fullCommitment.quantita, fullCommitment.articolo_nome);
+          }
         }
         db.prepare('DELETE FROM commitments WHERE id = ?').run(id);
       });
@@ -1877,15 +2535,22 @@ async function startServer() {
           }
         }
 
-        // Update impegni_clienti
-        db.prepare('UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?').run(qty, articolo_id);
+        // Update impegni_clienti only if it was a final phase
+        const isPiastra = article.nome?.toUpperCase().includes('PIASTRA');
+        const isFinal = isPiastra 
+          ? ['Grezzo', 'Piega', 'Generico'].includes(commitment.fase_produzione) 
+          : ['Verniciatura', 'Generico'].includes(commitment.fase_produzione);
+
+        if (isFinal) {
+          db.prepare('UPDATE articles SET impegni_clienti = MAX(0, impegni_clienti - ?) WHERE id = ?').run(qty, articolo_id);
+        }
 
         // Update commitment status
         db.prepare("UPDATE commitments SET stato_lavorazione = 'Completato', timestamp_modifica = CURRENT_TIMESTAMP WHERE id = ?").run(commitment.id);
 
         // Log movement
-        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(articolo_id, sourceFase, 'scarico da commessa', qty, username || 'System', commitment.cliente, commitment.commessa);
+        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(articolo_id, sourceFase, 'scarico da commessa', qty, username || 'System', commitment.cliente, commitment.commessa, new Date().toISOString());
         }
         return { success: true };
       })();
@@ -1904,7 +2569,9 @@ async function startServer() {
       const result = db.transaction(() => {
         const commitment = db.prepare('SELECT * FROM commitments WHERE id = ?').get(id) as any;
         if (!commitment) throw new Error("Impegno non trovato");
-        if (commitment.stato_lavorazione === 'Completato') throw new Error("Impegno già evaso");
+        if (commitment.stato_lavorazione === 'Completato') {
+          return { success: true, message: "Impegno già evaso" };
+        }
 
         const qty = commitment.quantita;
         const articolo_id = commitment.articolo_id;
@@ -1957,15 +2624,22 @@ async function startServer() {
           }
         }
 
-        // Update impegni_clienti
-        db.prepare('UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?').run(qty, articolo_id);
+        // Update impegni_clienti only if it was a final phase
+        const isPiastra = article.nome?.toUpperCase().includes('PIASTRA');
+        const isFinal = isPiastra 
+          ? ['Grezzo', 'Piega', 'Generico'].includes(commitment.fase_produzione) 
+          : ['Verniciatura', 'Generico'].includes(commitment.fase_produzione);
+
+        if (isFinal) {
+          db.prepare('UPDATE articles SET impegni_clienti = MAX(0, impegni_clienti - ?) WHERE id = ?').run(qty, articolo_id);
+        }
 
         // Update commitment status
         db.prepare("UPDATE commitments SET stato_lavorazione = 'Completato', timestamp_modifica = CURRENT_TIMESTAMP WHERE id = ?").run(id);
 
         // Log movement
-        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(articolo_id, sourceFase, 'scarico da commessa', qty, username || 'System', commitment.cliente, commitment.commessa);
+        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(articolo_id, sourceFase, 'scarico da commessa', qty, username || 'System', commitment.cliente, commitment.commessa, new Date().toISOString());
 
         return { success: true };
       })();
@@ -1987,12 +2661,20 @@ async function startServer() {
 
         // If it wasn't completed yet, we need to subtract from impegni_clienti
         if (commitment.stato_lavorazione !== 'Completato') {
-          db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(commitment.quantita, commitment.articolo_id);
+          const art = db.prepare('SELECT nome FROM articles WHERE id = ?').get(commitment.articolo_id) as any;
+          const isPiastra = art?.nome?.toUpperCase().includes('PIASTRA');
+          const isFinal = isPiastra 
+            ? ['Grezzo', 'Piega', 'Generico'].includes(commitment.fase_produzione) 
+            : ['Verniciatura', 'Generico'].includes(commitment.fase_produzione);
+
+          if (isFinal) {
+            db.prepare(`UPDATE articles SET impegni_clienti = impegni_clienti - ? WHERE id = ?`).run(commitment.quantita, commitment.articolo_id);
+          }
         }
 
         // Log the movement
-        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .run(commitment.articolo_id, 'Scarico', 'scarico da commessa', commitment.quantita, operatore || 'System', commitment.cliente, commitment.commessa);
+        db.prepare(`INSERT INTO movements_log (articolo_id, fase, tipo, quantita, operatore, cliente, commessa, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(commitment.articolo_id, 'Scarico', 'scarico da commessa', commitment.quantita, operatore || 'System', commitment.cliente, commitment.commessa, new Date().toISOString());
 
         db.prepare('DELETE FROM commitments WHERE id = ?').run(id);
       });
@@ -2000,6 +2682,25 @@ async function startServer() {
       transaction();
       
       res.json({ success: true, message: "Commessa spedita con successo" });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/production-alerts', (req, res) => {
+    try {
+      const alerts = db.prepare("SELECT * FROM production_alerts WHERE stato = 'pending' ORDER BY created_at DESC").all();
+      res.json(alerts);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/production-alerts/:id/dismiss', (req, res) => {
+    const { id } = req.params;
+    try {
+      db.prepare("UPDATE production_alerts SET stato = 'dismissed' WHERE id = ?").run(id);
+      res.json({ success: true });
     } catch (error: any) {
       res.status(400).json({ error: error.message });
     }
@@ -2066,6 +2767,15 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // --- Final Error Handler ---
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('[FATAL ERROR]', err);
+    res.status(500).json({ 
+      error: 'Errore interno del server', 
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined 
+    });
+  });
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });

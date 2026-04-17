@@ -248,12 +248,12 @@ export default function Macchina5000({ articles, username, role, onUpdate }: Mac
         // Special article - record in Movimenti C. Gialla
         await addMovimentoCGialla({
           articolo_spc: item.articolo,
-          fase: 'TAGLIO',
+          fase: 'Taglio',
           quantita: confirmedQty,
-          quantita_lanciata: item.quantita,
-          cliente_commessa: `${item.cliente || ''} ${item.commessa || ''}`.trim() || '-',
+          cliente: item.cliente || '-',
+          commessa: item.commessa || '-',
           operatore: username,
-          tempo_totale: totalTime,
+          tempo_min: totalTime,
           data_reg: new Date().toISOString()
         });
         toast.success('Articolo speciale registrato in Movimenti C. Gialla');

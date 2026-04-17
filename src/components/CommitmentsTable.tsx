@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Article, Commitment, AUTHORIZED_USERS } from '../types';
+import { getCategory } from '../utils';
 import { Edit2, Check, X, Info } from 'lucide-react';
 import { updateArticle } from '../api';
 import { toast } from 'react-hot-toast';
@@ -38,16 +39,21 @@ export default function CommitmentsTable({ articles, commitments, onUpdate, user
     setImpegni(article.impegni_clienti);
   };
 
+  const getArticleCommitments = (articleId: string) => {
+    const article = articles.find(a => String(a.id) === String(articleId));
+    const category = article ? getCategory(article.nome, article.codice) : '';
+    const isPiastra = category.toLowerCase().includes('piastre');
+    const targetPhase = isPiastra ? 'Piega' : 'Verniciatura';
+
+    return commitments.filter(c => c.articolo_id === articleId && c.stato_lavorazione !== 'Completato' && c.fase_produzione === targetPhase);
+  };
+
   // Sort articles by commitments (descending) to show most engaged items first
   const sortedArticles = [...articles].sort((a, b) => {
-    const impA = commitments.filter(c => c.articolo_id === a.id && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
-    const impB = commitments.filter(c => c.articolo_id === b.id && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
+    const impA = getArticleCommitments(a.id).reduce((sum, c) => sum + c.quantita, 0);
+    const impB = getArticleCommitments(b.id).reduce((sum, c) => sum + c.quantita, 0);
     return impB - impA;
   });
-
-  const getArticleCommitments = (articleId: string) => {
-    return commitments.filter(c => c.articolo_id === articleId && c.stato_lavorazione !== 'Completato');
-  };
 
   const getPrioritaLabel = (p: number) => {
     if (p === 0) return "Nessuna";

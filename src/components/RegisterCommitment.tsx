@@ -47,7 +47,7 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
     setRows(newRows);
   };
 
-  const filteredClients = clients.filter(c => c.nome.toLowerCase().includes(clientSearch.toLowerCase()));
+  const filteredClients = clients.filter(c => (c.nome || '').toLowerCase().includes(clientSearch.toLowerCase()));
 
   const handleClientSelect = (nome: string) => {
     setCliente(nome);
@@ -80,7 +80,7 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
   // If current phase is not available, reset to Verniciatura or Piega
   useEffect(() => {
     if (!availablePhases.includes(faseProduzione) && availablePhases.length > 0) {
-      if (selectedArticles.some(a => a.nome.toLowerCase().includes('piastra'))) {
+      if (selectedArticles.some(a => (a.nome || '').toLowerCase().includes('piastra'))) {
         setFaseProduzione(availablePhases.includes('Piega') ? 'Piega' : availablePhases[0]);
       } else {
         setFaseProduzione(availablePhases.includes('Verniciatura') ? 'Verniciatura' : availablePhases[0]);
@@ -122,10 +122,6 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
       const reqQty = parseInt(row.quantita.toString());
 
       if (cassaCompleta) {
-        if (reqQty > cassaCompleta.totale) {
-          toast.error(`Disponibilità insufficiente per ${cassaCompleta.articolo}. Richiesti: ${reqQty}, Disponibili: ${cassaCompleta.totale}`);
-          return;
-        }
         itemsToSend.push({
           is_cassa_completa: true,
           cassa_id: cassaCompleta.id,
@@ -134,21 +130,18 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
         });
       } else if (article) {
         const cat = getCategory(article.nome || '', article.codice || '');
-        const isCassaCompleta = cat === 'INVOLUCRI AT' || cat === 'Strutture Agr';
+        const isCassaCompleta = cat === 'INVOLUCRI AT';
         
         if (isCassaCompleta) {
-          if (faseProduzione !== 'Saldatura' && faseProduzione !== 'Verniciatura') {
-            toast.error(`Non è possibile impegnare casse complete (${article.codice}) nello stato ${faseProduzione}. Sono consentiti solo gli stati Saldato (SALD.) e Verniciato (VER.).`);
+          if (faseProduzione !== 'Saldatura' && faseProduzione !== 'Verniciatura' && faseProduzione !== 'Piega' && faseProduzione !== 'Taglio') {
+            toast.error(`Non è possibile impegnare casse complete (${article.codice}) nello stato ${faseProduzione}. Sono consentiti solo gli stati Taglio (TAG.), Piegato (PIEGA), Saldato (SALD.) e Verniciato (VER.).`);
             return;
           }
           
           const process = processes.find(p => p.articolo_id === article.id);
           const available = getPhaseAvailability(article, process, faseProduzione, commitments);
           
-          if (reqQty > available) {
-            toast.error(`Disponibilità insufficiente per ${article.codice} in fase ${faseProduzione}. Richiesti: ${reqQty}, Disponibili: ${available}`);
-            return;
-          }
+          // Removed stock check to allow negative availability as requested
         }
 
         itemsToSend.push({
@@ -389,7 +382,7 @@ export default function RegisterCommitment({ articles, onUpdate, username }: Reg
                 );
               } else if (article) {
                 const cat = getCategory(article.nome || '', article.codice || '');
-                if (cat === 'INVOLUCRI AT' || cat === 'Strutture Agr') {
+                if (cat === 'INVOLUCRI AT') {
                   const process = processes.find(p => p.articolo_id === article.id);
                   const available = getPhaseAvailability(article, process, faseProduzione, commitments);
                   availableInfo = (

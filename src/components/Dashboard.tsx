@@ -16,13 +16,20 @@ import Produzione2026View from './Produzione2026View';
 import FaseTaglioView from './FaseTaglioView';
 import Macchina5000 from './Macchina5000';
 import TaglioLaser from './TaglioLaser';
+import CGialleView from './CGialleView';
 import CasseATView from './CasseATView';
 import MagazzinoAGRView from './MagazzinoAGRView';
 import StruttureAGMView from './StruttureAGMView';
+import StruttureAGCView from './StruttureAGCView';
+import StruttureAGSView from './StruttureAGSView';
+import StruttureAGLMView from './StruttureAGLMView';
 import MagSemiLavView from './MagSemiLavView';
 import BancaCostiLavorazioni from './BancaCostiLavorazioni';
+import TermsPolicy from './TermsPolicy';
+import StdModificatoView from './StdModificatoView';
 import ErrorReportChat from './ErrorReportChat';
 import SyncPopup from './SyncPopup';
+import ProductionAlerts from './ProductionAlerts';
 import { MessageSquare } from 'lucide-react';
 import { Article, Process, Commitment, Client, AUTHORIZED_USERS, Macchina5000 as Macchina5000Type, TaglioLaser as TaglioLaserType, FaseTaglio } from '../types';
 import { apiCall } from '../api';
@@ -69,7 +76,7 @@ const checkAllarmi = (articoli: Article[], impegni: Commitment[]) => {
 };
 
 const SHOW_ERROR_CHAT = true; // Feature toggle per la sezione "Segnala Errori"
-const CHAT_AUTHORIZED_USERS = ['LucaTurati', 'TahaJbala', 'TahaDev'];
+const CHAT_AUTHORIZED_USERS = ['LucaTurati', 'TahaJbala', 'TahaDev', 'RobertoBonalumi', 'SamantaLimonta'];
 
 interface DashboardProps {
   username: string;
@@ -100,7 +107,8 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
   const [faseTaglio, setFaseTaglio] = useState<FaseTaglio[]>([]);
   const [faseSaldatura, setFaseSaldatura] = useState<FaseTaglio[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentView, setCurrentView] = useState<'dashboard' | 'produzione2026' | 'produzione2026spc' | 'impegni' | 'clienti' | 'movimenti' | 'movimentiCGialla' | 'import' | 'backup' | 'errorChat' | 'faseTaglio' | 'bancaCosti' | 'macchina5000' | 'taglioLaser' | 'casseAT' | 'magazzinoAGR' | 'magSemiLav' | 'struttureAGM'>(
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [currentView, setCurrentView] = useState<'dashboard' | 'produzione2026' | 'produzione2026spc' | 'impegni' | 'clienti' | 'movimenti' | 'movimentiCGialla' | 'import' | 'backup' | 'errorChat' | 'faseTaglio' | 'bancaCosti' | 'macchina5000' | 'taglioLaser' | 'casseAT' | 'magazzinoAGR' | 'magSemiLav' | 'struttureAGM' | 'struttureAGC' | 'struttureAGS' | 'struttureAGLM' | 'termsPolicy' | 'stdModificato' | 'cGialle'>(
     isElena ? 'produzione2026' : 
     isAndrea ? 'macchina5000' :
     isOsvaldo ? 'taglioLaser' :
@@ -108,10 +116,12 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
   );
   const [menuOpen, setMenuOpen] = useState(false);
   const [productionFamilyFilter, setProductionFamilyFilter] = useState('Tutte');
+  console.log('DEBUG: Dashboard productionFamilyFilter:', productionFamilyFilter);
   const [isProduzioneMenuExpanded, setIsProduzioneMenuExpanded] = useState(false);
   const [isPorteMenuExpanded, setIsPorteMenuExpanded] = useState(false);
   const [isRetriMenuExpanded, setIsRetriMenuExpanded] = useState(false);
   const [isLateraliMenuExpanded, setIsLateraliMenuExpanded] = useState(false);
+  const [isTettiMenuExpanded, setIsTettiMenuExpanded] = useState(false);
   const [isPiastreMenuExpanded, setIsPiastreMenuExpanded] = useState(false);
   const [isMagazzinoMenuExpanded, setIsMagazzinoMenuExpanded] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'default'>('default');
@@ -125,7 +135,7 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
   
   const isAuthorized = AUTHORIZED_USERS.includes(username);
   const isChatAuthorized = CHAT_AUTHORIZED_USERS.includes(username) || role === 'developer';
-  const isTaglioVisible = (role === 'admin' || role === 'developer' || (role && role.toLowerCase().trim().includes('taglio')) || username === 'RidaTecnico' || isSpecialShortcutUser) && !isAndrea && !isOsvaldo;
+  const isTaglioVisible = (role === 'admin' || role === 'developer' || (role && role.toLowerCase().trim().includes('taglio')) || username === 'RidaTecnico' || isSpecialShortcutUser) && !isAndrea && !isOsvaldo && username !== 'SamantaLimonta';
   console.log('DEBUG: username:', username, 'role:', role, 'isTaglioVisible:', isTaglioVisible, 'role type:', typeof role);
   
   const prevArticlesRef = useRef<Article[]>([]);
@@ -239,6 +249,8 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
       const faseSaldaturaData = await apiCall<FaseTaglio[]>('/api/fase-saldatura');
       await updateProgress(100);
       
+      setFetchError(null);
+      
       if (!Array.isArray(articlesData) || !Array.isArray(processesData) || !Array.isArray(commitmentsData) || !Array.isArray(macchina5000Data) || !Array.isArray(taglioLaserData) || !Array.isArray(faseTaglioData) || !Array.isArray(faseSaldaturaData)) {
         console.error('Data received is not in expected format', { articlesData, processesData, commitmentsData, macchina5000Data, taglioLaserData, faseTaglioData, faseSaldaturaData });
         if (isManual) setShowSync(false);
@@ -340,9 +352,13 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
       setFaseTaglio(faseTaglioData);
       setFaseSaldatura(faseSaldaturaData);
       setLastSyncTime(new Date().toLocaleTimeString());
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching data:", error);
-      if (isManual) setShowSync(false);
+      setFetchError(error.message || "Errore di connessione al server");
+      if (isManual) {
+        setShowSync(false);
+        toast.error("Errore durante la sincronizzazione: " + (error.message || "Connessione fallita"));
+      }
     } finally {
       setLoading(false);
     }
@@ -377,6 +393,9 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
       case 'magazzinoAGR': return 'Magazzino AGR';
       case 'struttureAGM': return 'Strutture AGM';
       case 'magSemiLav': return 'Mag. Semi Lav. D\'acquisto';
+      case 'termsPolicy': return 'Termini e Privacy Policy';
+      case 'stdModificato': return 'Standard Modificato';
+      case 'cGialle': return 'C. Gialle';
       default: return '';
     }
   };
@@ -386,6 +405,7 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
       {/* Sfondo con pattern leggerissimo per un look più tecnico/professionale */}
       <div className="absolute inset-0 opacity-[0.03] bg-[radial-gradient(#000000_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none"></div>
       
+      <ProductionAlerts username={username} />
       <Toaster position="top-right" toastOptions={{ className: 'font-medium rounded-xl shadow-lg' }} />
       
       <SyncPopup 
@@ -475,18 +495,30 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
                   )}
                 >
                   <History className="h-3.5 w-3.5" />
-                  <span>MOVIMENTI C. GIALLA</span>
+                  <span>STORICO C.G</span>
                 </button>
                 <button 
-                  onClick={() => setCurrentView('faseTaglio')} 
+                  onClick={() => setCurrentView('cGialle')} 
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
-                    currentView === 'faseTaglio' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                    currentView === 'cGialle' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
                   )}
                 >
-                  <Scissors className="h-3.5 w-3.5" />
-                  <span>FASE TAGLIO</span>
+                  <History className="h-3.5 w-3.5" />
+                  <span>C. GIALLE</span>
                 </button>
+                {isTaglioVisible && (
+                  <button 
+                    onClick={() => setCurrentView('faseTaglio')} 
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                      currentView === 'faseTaglio' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                    )}
+                  >
+                    <Scissors className="h-3.5 w-3.5" />
+                    <span>FASE TAGLIO</span>
+                  </button>
+                )}
               </div>
             ) : (isAndrea || isRida || isOsvaldo || role === 'developer') ? (
               <div className="hidden md:flex items-center gap-2 ml-4 lg:ml-8 border-l border-white/10 pl-4 lg:pl-8">
@@ -536,6 +568,16 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
                   <Scissors className="h-3.5 w-3.5" />
                   <span>FASE TAGLIO</span>
                 </button>
+                <button 
+                  onClick={() => setCurrentView('cGialle')} 
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
+                    currentView === 'cGialle' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                  )}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span>C. GIALLE</span>
+                </button>
               </div>
             ) : role !== 'taglio_only' && !isElena && (
               <div className="hidden md:flex items-center gap-2 ml-4 lg:ml-8 border-l border-white/10 pl-4 lg:pl-8">
@@ -580,14 +622,14 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
                   <span>MOVIMENTI</span>
                 </button>
                 <button 
-                  onClick={() => setCurrentView('movimentiCGialla')} 
+                  onClick={() => setCurrentView('cGialle')} 
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider transition-all flex items-center gap-2", 
-                    currentView === 'movimentiCGialla' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
+                    currentView === 'cGialle' ? "bg-white/20 text-white shadow-inner" : "text-blue-200 hover:bg-white/10 hover:text-white"
                   )}
                 >
                   <History className="h-3.5 w-3.5" />
-                  <span>MOVIMENTI C. GIALLA</span>
+                  <span>C. GIALLE</span>
                 </button>
               </div>
             )}
@@ -644,18 +686,7 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
               </div>
             </div>
 
-            {checkAllarmi(articles, commitments) && (
-              <div 
-                className="flex items-center justify-center h-10 w-10 bg-red-500 hover:bg-red-400 transition-colors rounded-full animate-pulse cursor-pointer shadow-lg shadow-red-500/30 border border-red-400/50" 
-                title="Allarme scorte negative"
-                onClick={() => {
-                  setProductionFamilyFilter('Tutte');
-                  setCurrentView('produzione2026');
-                }}
-              >
-                <BellRing className="h-5 w-5 text-white" />
-              </div>
-            )}
+
             {notificationPermission === 'default' && (
               <button
                 onClick={requestNotificationPermission}
@@ -735,7 +766,7 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
                   </button>
                   {[
                     'Porte', 'Retri', 'Laterali', 'Tetti', 'Piastre', 'Basi&Tetti', 
-                    'Strutture Agr', 'AGS', 'AGC', 'AGLM', 'AGLC', 'Cristalli'
+                    'Strutture Agr', 'Strutture AGM', 'AGLC', 'Cristalli'
                   ].map(family => {
                     const isFamilyActive = productionFamilyFilter === family || 
                       (family === 'Porte' && ['Porte Standard', 'Porte IB/CB', 'Porte PX/PV', 'Porte INT/LAT/180°'].includes(productionFamilyFilter)) ||
@@ -912,6 +943,33 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
                 ) : null}
                 {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
                   <button
+                    onClick={() => { setCurrentView('struttureAGC'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'struttureAGC' ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Package className="h-5 w-5" />
+                    <span>Strutture AGC</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('struttureAGS'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'struttureAGS' ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Package className="h-5 w-5" />
+                    <span>Strutture AGS</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
+                    onClick={() => { setCurrentView('struttureAGLM'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'struttureAGLM' ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Package className="h-5 w-5" />
+                    <span>Strutture AGLM</span>
+                  </button>
+                ) : null}
+                {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
+                  <button
                     onClick={() => { setCurrentView('impegni'); setMenuOpen(false); }}
                     className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'impegni' ? 'bg-indigo-500/10 text-indigo-400 border-l-4 border-indigo-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
                   >
@@ -938,14 +996,32 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
                   </button>
                 ) : null}
                 {(!isAndrea && !isOsvaldo && !isRida) || role === 'developer' ? (
-                  <button
-                    onClick={() => { setCurrentView('movimentiCGialla'); setMenuOpen(false); }}
-                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'movimentiCGialla' ? 'bg-yellow-500/10 text-yellow-400 border-l-4 border-yellow-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
-                  >
-                    <History className="h-5 w-5" />
-                    <span>Movimenti C. Gialla</span>
-                  </button>
+                  <>
+                    <button
+                      onClick={() => { setCurrentView('movimentiCGialla'); setMenuOpen(false); }}
+                      className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'movimentiCGialla' ? 'bg-yellow-500/10 text-yellow-400 border-l-4 border-yellow-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                    >
+                      <History className="h-5 w-5" />
+                      <span>Storico C. Gialla</span>
+                    </button>
+                    <button
+                      onClick={() => { setCurrentView('cGialle'); setMenuOpen(false); }}
+                      className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'cGialle' ? 'bg-yellow-500/10 text-yellow-400 border-l-4 border-yellow-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                    >
+                      <History className="h-5 w-5" />
+                      <span>C. Gialle</span>
+                    </button>
+                  </>
                 ) : null}
+                {!isElena && (!isAndrea && !isOsvaldo && !isRida || role === 'developer') && (
+                  <button
+                    onClick={() => { setCurrentView('stdModificato'); setMenuOpen(false); }}
+                    className={`w-full text-left px-6 py-3.5 flex items-center gap-3 transition-all ${currentView === 'stdModificato' ? 'bg-emerald-500/10 text-emerald-400 border-l-4 border-emerald-500 font-semibold' : 'text-slate-300 hover:bg-white/5 hover:text-white border-l-4 border-transparent font-medium'}`}
+                  >
+                    <Grid className="h-5 w-5" />
+                    <span>Std Modificato</span>
+                  </button>
+                )}
               </>
             )}
             <div className="border-t border-slate-700/50 my-2 mx-4"></div>
@@ -1037,8 +1113,26 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
       {/* Main Content */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-8 relative z-10" onClick={() => menuOpen && setMenuOpen(false)}>
         {loading ? (
-          <div className="flex items-center justify-center h-64">
+          <div className="flex flex-col items-center justify-center h-64 gap-4">
             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
+            <p className="text-slate-500 font-medium animate-pulse">Caricamento dati in corso...</p>
+          </div>
+        ) : fetchError && articles.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-64 gap-6 bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+            <div className="bg-red-50 p-4 rounded-full">
+              <Activity className="h-10 w-10 text-red-500" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-xl font-bold text-slate-800">Errore di Caricamento</h3>
+              <p className="text-slate-500 mt-2 max-w-md">{fetchError}</p>
+            </div>
+            <button 
+              onClick={() => { setLoading(true); fetchData(true); }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all flex items-center gap-2"
+            >
+              <Activity className="h-5 w-5" />
+              Riprova Caricamento
+            </button>
           </div>
         ) : currentView === 'dashboard' ? (
           <>
@@ -1078,6 +1172,7 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
               }
               return null;
             })()}
+
 
             {/* Top Section: Operational Tools */}
             <div className={`grid grid-cols-1 ${role === 'taglio_only' ? '' : 'lg:grid-cols-2'} gap-8 mb-8`}>
@@ -1141,9 +1236,29 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
             commitments={commitments} 
             onUpdate={handleArticleUpdate}
           />
+        ) : currentView === 'struttureAGC' ? (
+          <StruttureAGCView 
+            articles={articles} 
+            processes={processes} 
+            commitments={commitments} 
+            onUpdate={handleArticleUpdate}
+          />
+        ) : currentView === 'struttureAGS' ? (
+          <StruttureAGSView 
+            articles={articles} 
+            processes={processes} 
+            commitments={commitments} 
+            onUpdate={handleArticleUpdate}
+          />
+        ) : currentView === 'struttureAGLM' ? (
+          <StruttureAGLMView 
+            articles={articles} 
+            processes={processes} 
+            commitments={commitments} 
+          />
         ) : currentView === 'magSemiLav' ? (
           <MagSemiLavView />
-        ) : currentView === 'faseTaglio' ? (
+        ) : currentView === 'faseTaglio' && username !== 'SamantaLimonta' ? (
           <FaseTaglioView articles={articles} username={username} onUpdate={handleArticleUpdate} />
         ) : currentView === 'macchina5000' && !isOsvaldo ? (
           <Macchina5000 articles={articles} username={username} role={role} onUpdate={handleArticleUpdate} />
@@ -1163,14 +1278,21 @@ export default function Dashboard({ username, role, onLogout }: DashboardProps) 
           <ErrorReportChat username={username} socket={socket} />
         ) : currentView === 'movimentiCGialla' ? (
           <MovimentiCGiallaView />
+        ) : currentView === 'cGialle' ? (
+          <CGialleView username={username} />
+        ) : currentView === 'termsPolicy' ? (
+          <TermsPolicy />
+        ) : currentView === 'stdModificato' ? (
+          <StdModificatoView />
         ) : (
           <MovementsView />
         )}
       </main>
 
       {/* Footer */}
-      <footer className="py-5 text-center text-sm text-slate-400 border-t border-slate-200/60 mt-auto bg-white/50 backdrop-blur-sm font-medium relative z-10">
-        &copy; {new Date().getFullYear()} Auger S.r.l. - Dashboard Auger
+      <footer className="py-5 text-center text-sm text-slate-400 border-t border-slate-200/60 mt-auto bg-white/50 backdrop-blur-sm font-medium relative z-10 flex justify-center items-center gap-4">
+        <span>&copy; {new Date().getFullYear()} Auger S.r.l.</span>
+        <button onClick={() => setCurrentView('termsPolicy')} className="hover:text-blue-600 transition-colors underline">Termini e Policy</button>
       </footer>
     </div>
   );

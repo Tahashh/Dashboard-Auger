@@ -24,15 +24,24 @@ export async function apiCall<T>(url: string, options?: RequestInit, retries = 3
     }
 
     const contentType = response.headers.get('content-type');
+    const text = await response.text();
+    
+    // Check if we got the "Starting Server..." page from the platform
+    if (text.includes('<title>Starting Server...</title>') && retries > 0) {
+      console.warn(`Il server si sta avviando. Riprovo tra ${backoff}ms...`);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+      return apiCall<T>(url, options, retries - 1, backoff * 2);
+    }
+
     if (contentType && !contentType.includes('application/json')) {
+      console.error(`Invalid response body: ${text}`);
       if (!response.ok) {
         throw new Error(`Errore API: ${response.status} ${response.statusText}`);
       }
       // If it's not JSON but response is OK, it might be an HTML error page from Vite
-      throw new Error(`Risposta non valida dal server (non JSON)`);
+      throw new Error(`Risposta non valida dal server (non JSON). URL: ${url}. Body: ${text.substring(0, 100)}`);
     }
 
-    const text = await response.text();
     let data: any;
     try {
       data = text ? JSON.parse(text) : null;
@@ -81,6 +90,12 @@ export const updateArticle = async (id: string, article: Partial<Article>) => {
 export const deleteArticle = async (id: string) => {
   return apiCall(`/api/articles/${id}`, {
     method: 'DELETE',
+  });
+};
+
+export const toggleArticleBlock = async (id: string) => {
+  return apiCall<{ success: boolean, is_blocked: number }>(`/api/articles/${id}/toggle-block`, {
+    method: 'PATCH',
   });
 };
 
@@ -275,6 +290,18 @@ export const deleteTaglioLaser = async (id: string) => {
   });
 };
 
+// C. Gialle
+export const fetchCGialle = async (): Promise<any[]> => {
+  return apiCall<any[]>('/api/c-gialle');
+};
+
+export const addCGialle = async (data: any) => {
+  return apiCall('/api/c-gialle', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+};
+
 // Movimenti C. Gialla
 export const fetchMovimentiCGialla = async (): Promise<any[]> => {
   return apiCall<any[]>('/api/movimenti-c-gialla');
@@ -349,6 +376,13 @@ export const fetchInvolucroAT = async (): Promise<InvolucroAT[]> => {
 export const updateInvolucroAT = async (id: number, data: Partial<InvolucroAT>) => {
   return apiCall(`/api/casse-at/involucro/${id}`, {
     method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+export const assemblaggioCassaAT = async (data: { L: number, H: number, P: number, Q: number }) => {
+  return apiCall('/api/casse-at/assemblaggio', {
+    method: 'POST',
     body: JSON.stringify(data),
   });
 };

@@ -15,7 +15,10 @@ const db = new Database(dbPath);
 console.log('Database connection established.');
 
 db.pragma('journal_mode = WAL');
-console.log('WAL mode enabled.');
+db.pragma('synchronous = NORMAL');
+db.pragma('cache_size = -10000'); // 10MB cache
+db.pragma('temp_store = MEMORY');
+console.log('WAL mode and performance optimizations enabled.');
 
 // Initialize tables
 console.log('Initializing tables...');
@@ -29,9 +32,10 @@ db.exec(`
     piega INTEGER DEFAULT 0,
     scorta INTEGER DEFAULT 10,
     prezzo REAL DEFAULT 0,
-    famiglia TEXT
+    famiglia TEXT,
+    is_blocked INTEGER DEFAULT 0
   );
-
+ 
   CREATE TABLE IF NOT EXISTS processes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     articolo_id INTEGER NOT NULL UNIQUE,
@@ -91,6 +95,14 @@ db.exec(`
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE INDEX IF NOT EXISTS idx_articles_codice ON articles(codice);
+  CREATE INDEX IF NOT EXISTS idx_commitments_articolo_id ON commitments(articolo_id);
+  CREATE INDEX IF NOT EXISTS idx_commitments_cliente ON commitments(cliente);
+  CREATE INDEX IF NOT EXISTS idx_movements_log_articolo_id ON movements_log(articolo_id);
+  CREATE INDEX IF NOT EXISTS idx_movements_log_timestamp ON movements_log(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_processes_articolo_id ON processes(articolo_id);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp);
+
   CREATE TABLE IF NOT EXISTS macchina_5000 (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     data TEXT NOT NULL,
@@ -129,6 +141,63 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS c_gialle (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    data_reg DATETIME DEFAULT CURRENT_TIMESTAMP,
+    articolo_spc TEXT NOT NULL,
+    fase_richiesta TEXT NOT NULL,
+    quantita INTEGER NOT NULL,
+    cliente TEXT,
+    commessa TEXT,
+    mese TEXT,
+    note TEXT,
+    operatore TEXT,
+    tempo_min INTEGER,
+    stato TEXT DEFAULT 'Iniziato',
+    data_aggiornamento DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(articolo_spc, commessa, cliente)
+  );
+
+  CREATE TABLE IF NOT EXISTS movimenti_c_gialla (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    data_reg DATETIME DEFAULT CURRENT_TIMESTAMP,
+    articolo_spc TEXT NOT NULL,
+    fase TEXT NOT NULL,
+    quantita INTEGER NOT NULL,
+    cliente TEXT,
+    commessa TEXT,
+    operatore TEXT,
+    tempo_min INTEGER
+  );
+
+  CREATE TRIGGER IF NOT EXISTS trg_movimenti_c_gialla_after_insert
+  AFTER INSERT ON movimenti_c_gialla
+  BEGIN
+    INSERT INTO c_gialle (articolo_spc, fase_richiesta, quantita, cliente, commessa, operatore, tempo_min, stato, data_aggiornamento)
+    SELECT NEW.articolo_spc, NEW.fase, NEW.quantita, NEW.cliente, NEW.commessa, NEW.operatore, NEW.tempo_min, 
+           CASE 
+             WHEN NEW.fase = 'Taglio' THEN 'Tagliato'
+             WHEN NEW.fase = 'Piega' THEN 'Piegato'
+             WHEN NEW.fase = 'Saldatura' THEN 'Saldato'
+             WHEN NEW.fase = 'Verniciatura' THEN 'Verniciato'
+             ELSE 'Iniziato'
+           END, 
+           CURRENT_TIMESTAMP
+    WHERE NOT EXISTS (SELECT 1 FROM c_gialle WHERE articolo_spc = NEW.articolo_spc AND commessa = NEW.commessa AND cliente = NEW.cliente);
+
+    UPDATE c_gialle
+    SET 
+      stato = CASE 
+                WHEN NEW.fase = 'Taglio' THEN 'Tagliato'
+                WHEN NEW.fase = 'Piega' THEN 'Piegato'
+                WHEN NEW.fase = 'Saldatura' THEN 'Saldato'
+                WHEN NEW.fase = 'Verniciatura' THEN 'Verniciato'
+                ELSE stato
+              END,
+      data_aggiornamento = CURRENT_TIMESTAMP
+    WHERE articolo_spc = NEW.articolo_spc AND commessa = NEW.commessa AND cliente = NEW.cliente;
+  END;
+
   CREATE TABLE IF NOT EXISTS fase_taglio (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lavorazione_per TEXT,
@@ -139,6 +208,18 @@ db.exec(`
     commessa TEXT,
     fatto INTEGER DEFAULT 0,
     stampato INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS production_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo TEXT NOT NULL, -- 'INVOLUCRO_WIP'
+    articolo TEXT NOT NULL,
+    quantita INTEGER NOT NULL,
+    cliente TEXT,
+    commessa TEXT,
+    azione_richiesta TEXT,
+    stato TEXT DEFAULT 'pending', -- 'pending', 'dismissed', 'completed'
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -249,27 +330,45 @@ db.exec(`
     UNIQUE(tipo, misura)
   );
 
+  CREATE TABLE IF NOT EXISTS movimenti_traverse (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo_traversa TEXT NOT NULL,
+    misura INTEGER NOT NULL,
+    quantita INTEGER NOT NULL,
+    tipo_movimento TEXT NOT NULL, -- 'carico', 'scarico'
+    origine TEXT NOT NULL, -- 'manuale', 'automatico'
+    riferimento TEXT, -- e.g. 'AGR-STB0304'
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS agr_requirements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agr_codice TEXT NOT NULL UNIQUE,
     forata_misura INTEGER NOT NULL,
     cieca_misura INTEGER NOT NULL,
-    tetto1_misura INTEGER NOT NULL,
-    tetto2_misura INTEGER NOT NULL,
+    tetto_misura_w INTEGER NOT NULL,
+    tetto_misura_h INTEGER NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE INDEX IF NOT EXISTS idx_macchina_5000_articolo ON macchina_5000(articolo);
+  CREATE INDEX IF NOT EXISTS idx_taglio_laser_articolo ON taglio_laser(articolo);
+  CREATE INDEX IF NOT EXISTS idx_fase_taglio_articolo ON fase_taglio(articolo);
+  CREATE INDEX IF NOT EXISTS idx_fase_saldatura_articolo ON fase_saldatura(articolo);
+  CREATE INDEX IF NOT EXISTS idx_movimenti_c_gialla_articolo ON movimenti_c_gialla(articolo_spc);
+  CREATE INDEX IF NOT EXISTS idx_archivio_stampe_articolo ON archivio_stampe(articolo);
 `);
 
 // Seed traverse_inventory
 try {
   const traverseData = [
     { tipo: 'forata', misure: [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800] },
-    { tipo: 'cieca', misure: [400, 500, 600, 800, 1000] },
-    { tipo: 'tetto1', misure: [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800] },
-    { tipo: 'tetto2', misure: [400, 500, 600, 800, 1000] }
+    { tipo: 'cieca', misure: [300, 400, 500, 600, 800, 1000, 1200, 1400, 1600, 1800] },
+    { tipo: 'tetto', misure: [300, 400, 500, 600, 800, 1000, 1200, 1400, 1600, 1800] },
+    { tipo: 'TRA. LAT. AGS', misure: [400, 500, 600] }
   ];
 
-  const insert = db.prepare('INSERT OR IGNORE INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, 5000)');
+  const insert = db.prepare('INSERT OR IGNORE INTO traverse_inventory (tipo, misura, quantita) VALUES (?, ?, 100)');
   for (const item of traverseData) {
     for (const misura of item.misure) {
       insert.run(item.tipo, misura);
@@ -279,12 +378,16 @@ try {
   console.error('Error seeding traverse_inventory:', e);
 }
 
-// Update existing records to 5000
+// Update existing records to 100
 try {
-  db.prepare('UPDATE traverse_inventory SET quantita = 5000').run();
+  db.prepare('UPDATE traverse_inventory SET quantita = 100').run();
 } catch (e) {
   console.error('Error updating traverse_inventory quantities:', e);
 }
+
+try {
+  db.exec('ALTER TABLE articles ADD COLUMN is_blocked INTEGER DEFAULT 0;');
+} catch (e) {}
 
 try {
   db.exec('ALTER TABLE fase_taglio ADD COLUMN odl TEXT;');
@@ -386,52 +489,52 @@ try {
 // Seed agr_requirements
 try {
   const seedRequirements = [
-    { agr_codice: 'AGR0304', forata: 300, cieca: 400, tetto1: 300, tetto2: 400 },
-    { agr_codice: 'AGR0305', forata: 300, cieca: 400, tetto1: 300, tetto2: 400 },
-    { agr_codice: 'AGR0306', forata: 300, cieca: 400, tetto1: 300, tetto2: 400 },
-    { agr_codice: 'AGR0404', forata: 400, cieca: 400, tetto1: 400, tetto2: 400 },
-    { agr_codice: 'AGR0405', forata: 400, cieca: 500, tetto1: 400, tetto2: 500 },
-    { agr_codice: 'AGR0406', forata: 400, cieca: 600, tetto1: 400, tetto2: 600 },
-    { agr_codice: 'AGR0408', forata: 400, cieca: 800, tetto1: 400, tetto2: 800 },
-    { agr_codice: 'AGR0410', forata: 400, cieca: 1000, tetto1: 400, tetto2: 1000 },
-    { agr_codice: 'AGR0604', forata: 600, cieca: 400, tetto1: 600, tetto2: 400 },
-    { agr_codice: 'AGR0605', forata: 600, cieca: 500, tetto1: 600, tetto2: 500 },
-    { agr_codice: 'AGR0606', forata: 600, cieca: 600, tetto1: 600, tetto2: 600 },
-    { agr_codice: 'AGR0608', forata: 600, cieca: 800, tetto1: 600, tetto2: 800 },
-    { agr_codice: 'AGR0610', forata: 600, cieca: 1000, tetto1: 600, tetto2: 1000 },
-    { agr_codice: 'AGR0804', forata: 800, cieca: 400, tetto1: 800, tetto2: 400 },
-    { agr_codice: 'AGR0805', forata: 800, cieca: 500, tetto1: 800, tetto2: 500 },
-    { agr_codice: 'AGR0806', forata: 800, cieca: 600, tetto1: 800, tetto2: 600 },
-    { agr_codice: 'AGR0808', forata: 800, cieca: 800, tetto1: 800, tetto2: 800 },
-    { agr_codice: 'AGR0810', forata: 800, cieca: 1000, tetto1: 800, tetto2: 1000 },
-    { agr_codice: 'AGR1004', forata: 1000, cieca: 400, tetto1: 1000, tetto2: 400 },
-    { agr_codice: 'AGR1005', forata: 1000, cieca: 500, tetto1: 1000, tetto2: 500 },
-    { agr_codice: 'AGR1006', forata: 1000, cieca: 600, tetto1: 1000, tetto2: 600 },
-    { agr_codice: 'AGR1008', forata: 1000, cieca: 800, tetto1: 1000, tetto2: 800 },
-    { agr_codice: 'AGR1010', forata: 1000, cieca: 1000, tetto1: 1000, tetto2: 1000 },
-    { agr_codice: 'AGR1204', forata: 1200, cieca: 400, tetto1: 1200, tetto2: 400 },
-    { agr_codice: 'AGR1205', forata: 1200, cieca: 500, tetto1: 1200, tetto2: 500 },
-    { agr_codice: 'AGR1206', forata: 1200, cieca: 600, tetto1: 1200, tetto2: 600 },
-    { agr_codice: 'AGR1208', forata: 1200, cieca: 800, tetto1: 1200, tetto2: 800 },
-    { agr_codice: 'AGR1210', forata: 1200, cieca: 1000, tetto1: 1200, tetto2: 1000 },
-    { agr_codice: 'AGR1212', forata: 1200, cieca: 1000, tetto1: 1200, tetto2: 1000 },
-    { agr_codice: 'AGR1404', forata: 1400, cieca: 400, tetto1: 1400, tetto2: 400 },
-    { agr_codice: 'AGR1405', forata: 1400, cieca: 500, tetto1: 1400, tetto2: 500 },
-    { agr_codice: 'AGR1406', forata: 1400, cieca: 600, tetto1: 1400, tetto2: 600 },
-    { agr_codice: 'AGR1408', forata: 1400, cieca: 800, tetto1: 1400, tetto2: 800 },
-    { agr_codice: 'AGR1410', forata: 1400, cieca: 1000, tetto1: 1400, tetto2: 1000 },
-    { agr_codice: 'AGR1604', forata: 1600, cieca: 400, tetto1: 1600, tetto2: 400 },
-    { agr_codice: 'AGR1605', forata: 1600, cieca: 500, tetto1: 1600, tetto2: 500 },
-    { agr_codice: 'AGR1606', forata: 1600, cieca: 600, tetto1: 1600, tetto2: 600 },
-    { agr_codice: 'AGR1608', forata: 1600, cieca: 800, tetto1: 1600, tetto2: 800 },
-    { agr_codice: 'AGR1610', forata: 1600, cieca: 1000, tetto1: 1600, tetto2: 1000 },
-    { agr_codice: 'AGR1804', forata: 1800, cieca: 400, tetto1: 1800, tetto2: 400 },
-    { agr_codice: 'AGR1805', forata: 1800, cieca: 500, tetto1: 1800, tetto2: 500 },
-    { agr_codice: 'AGR1806', forata: 1800, cieca: 600, tetto1: 1800, tetto2: 600 }
+    { agr_codice: 'AGR0304', forata: 300, cieca: 400, tetto_w: 300, tetto_h: 400 },
+    { agr_codice: 'AGR0305', forata: 300, cieca: 500, tetto_w: 300, tetto_h: 500 },
+    { agr_codice: 'AGR0306', forata: 300, cieca: 600, tetto_w: 300, tetto_h: 600 },
+    { agr_codice: 'AGR0404', forata: 400, cieca: 400, tetto_w: 400, tetto_h: 400 },
+    { agr_codice: 'AGR0405', forata: 400, cieca: 500, tetto_w: 400, tetto_h: 500 },
+    { agr_codice: 'AGR0406', forata: 400, cieca: 600, tetto_w: 400, tetto_h: 600 },
+    { agr_codice: 'AGR0408', forata: 400, cieca: 800, tetto_w: 400, tetto_h: 800 },
+    { agr_codice: 'AGR0410', forata: 400, cieca: 1000, tetto_w: 400, tetto_h: 1000 },
+    { agr_codice: 'AGR0604', forata: 600, cieca: 400, tetto_w: 600, tetto_h: 400 },
+    { agr_codice: 'AGR0605', forata: 600, cieca: 500, tetto_w: 600, tetto_h: 500 },
+    { agr_codice: 'AGR0606', forata: 600, cieca: 600, tetto_w: 600, tetto_h: 600 },
+    { agr_codice: 'AGR0608', forata: 600, cieca: 800, tetto_w: 600, tetto_h: 800 },
+    { agr_codice: 'AGR0610', forata: 600, cieca: 1000, tetto_w: 600, tetto_h: 1000 },
+    { agr_codice: 'AGR0804', forata: 800, cieca: 400, tetto_w: 800, tetto_h: 400 },
+    { agr_codice: 'AGR0805', forata: 800, cieca: 500, tetto_w: 800, tetto_h: 500 },
+    { agr_codice: 'AGR0806', forata: 800, cieca: 600, tetto_w: 800, tetto_h: 600 },
+    { agr_codice: 'AGR0808', forata: 800, cieca: 800, tetto_w: 800, tetto_h: 800 },
+    { agr_codice: 'AGR0810', forata: 800, cieca: 1000, tetto_w: 800, tetto_h: 1000 },
+    { agr_codice: 'AGR1004', forata: 1000, cieca: 400, tetto_w: 1000, tetto_h: 400 },
+    { agr_codice: 'AGR1005', forata: 1000, cieca: 500, tetto_w: 1000, tetto_h: 500 },
+    { agr_codice: 'AGR1006', forata: 1000, cieca: 600, tetto_w: 1000, tetto_h: 600 },
+    { agr_codice: 'AGR1008', forata: 1000, cieca: 800, tetto_w: 1000, tetto_h: 800 },
+    { agr_codice: 'AGR1010', forata: 1000, cieca: 1000, tetto_w: 1000, tetto_h: 1000 },
+    { agr_codice: 'AGR1204', forata: 1200, cieca: 400, tetto_w: 1200, tetto_h: 400 },
+    { agr_codice: 'AGR1205', forata: 1200, cieca: 500, tetto_w: 1200, tetto_h: 500 },
+    { agr_codice: 'AGR1206', forata: 1200, cieca: 600, tetto_w: 1200, tetto_h: 600 },
+    { agr_codice: 'AGR1208', forata: 1200, cieca: 800, tetto_w: 1200, tetto_h: 800 },
+    { agr_codice: 'AGR1210', forata: 1200, cieca: 1000, tetto_w: 1200, tetto_h: 1000 },
+    { agr_codice: 'AGR1212', forata: 1200, cieca: 1200, tetto_w: 1200, tetto_h: 1200 },
+    { agr_codice: 'AGR1404', forata: 1400, cieca: 400, tetto_w: 1400, tetto_h: 400 },
+    { agr_codice: 'AGR1405', forata: 1400, cieca: 500, tetto_w: 1400, tetto_h: 500 },
+    { agr_codice: 'AGR1406', forata: 1400, cieca: 600, tetto_w: 1400, tetto_h: 600 },
+    { agr_codice: 'AGR1408', forata: 1400, cieca: 800, tetto_w: 1400, tetto_h: 800 },
+    { agr_codice: 'AGR1410', forata: 1400, cieca: 1000, tetto_w: 1400, tetto_h: 1000 },
+    { agr_codice: 'AGR1604', forata: 1600, cieca: 400, tetto_w: 1600, tetto_h: 400 },
+    { agr_codice: 'AGR1605', forata: 1600, cieca: 500, tetto_w: 1600, tetto_h: 500 },
+    { agr_codice: 'AGR1606', forata: 1600, cieca: 600, tetto_w: 1600, tetto_h: 600 },
+    { agr_codice: 'AGR1608', forata: 1600, cieca: 800, tetto_w: 1600, tetto_h: 800 },
+    { agr_codice: 'AGR1610', forata: 1600, cieca: 1000, tetto_w: 1600, tetto_h: 1000 },
+    { agr_codice: 'AGR1804', forata: 1800, cieca: 400, tetto_w: 1800, tetto_h: 400 },
+    { agr_codice: 'AGR1805', forata: 1800, cieca: 500, tetto_w: 1800, tetto_h: 500 },
+    { agr_codice: 'AGR1806', forata: 1800, cieca: 600, tetto_w: 1800, tetto_h: 600 }
   ];
-  const stmt = db.prepare('INSERT OR IGNORE INTO agr_requirements (agr_codice, forata_misura, cieca_misura, tetto1_misura, tetto2_misura) VALUES (?, ?, ?, ?, ?)');
+  const stmt = db.prepare('INSERT OR IGNORE INTO agr_requirements (agr_codice, forata_misura, cieca_misura, tetto_misura_w, tetto_misura_h) VALUES (?, ?, ?, ?, ?)');
   const insertMany = db.transaction((reqs) => {
-    for (const r of reqs) stmt.run(r.agr_codice, r.forata, r.cieca, r.tetto1, r.tetto2);
+    for (const r of reqs) stmt.run(r.agr_codice, r.forata, r.cieca, r.tetto_w, r.tetto_h);
   });
   insertMany(seedRequirements);
 } catch (e) {
@@ -451,6 +554,7 @@ try {
 } catch (e) {}
 
 // Cleanup 'Altro' articles
+/*
 try {
   const getCategory = (name: string, code?: string): string => {
     const upperName = name?.toUpperCase() || '';
@@ -506,6 +610,7 @@ try {
 } catch (e) {
   console.error('Error during Altro cleanup:', e);
 }
+*/
 
 try {
   db.exec('ALTER TABLE processes ADD COLUMN saldatura INTEGER DEFAULT 0;');
@@ -619,6 +724,14 @@ try {
 
 try {
   db.exec('ALTER TABLE movements_log ADD COLUMN tempo INTEGER;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE c_gialle ADD COLUMN mese TEXT;');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE c_gialle ADD COLUMN note TEXT;');
 } catch (e) {}
 
 try {
@@ -1102,6 +1215,53 @@ seedArticles.push({
   famiglia: 'Strutture Agr'
 });
 
+// Generate Strutture AGS articles
+const misureAGS = [
+  '400X1600X400', '600X1600X400', '800X1600X400', '1000X1600X400', '1200X1600X400',
+  '400X1800X400', '600X1800X400', '800X1800X400', '1000X1800X400', '1200X1800X400',
+  '400X2000X400', '600X2000X400', '800X2000X400', '1000X2000X400', '1200X2000X400',
+  '400X1600X500', '600X1600X500', '800X1600X500', '1000X1600X500', '1200X1600X500',
+  '400X1800X500', '600X1800X500', '800X1800X500', '1000X1800X500', '1200X1800X500',
+  '400X2000X500', '600X2000X500', '800X2000X500', '1000X2000X500', '1200X2000X500',
+  '400X1600X600', '600X1600X600', '800X1600X600', '1000X1600X600', '1200X1600X600',
+  '400X1800X600', '600X1800X600', '800X1800X600', '1000X1800X600', '1200X1800X600',
+  '400X2000X600', '600X2000X600', '800X2000X600', '1000X2000X600', '1200X2000X600',
+  '400X1600X800', '600X1600X800', '800X1600X800', '1000X1600X800', '1200X1600X800',
+  '400X1800X800', '600X1800X800', '800X1800X800', '1000X1800X800', '1200X1800X800',
+  '400X2000X800', '600X2000X800', '800X2000X800', '1000X2000X800', '1200X2000X800'
+];
+
+for (const m of misureAGS) {
+  seedArticles.push({
+    nome: `STRUTTURA AGS ${m}`,
+    codice: `AGS ${m}`,
+    famiglia: 'Strutture Ags'
+  });
+}
+
+const struttureAGCList = [
+  { nome: "STRUTTURA AGC 600X1200X400", codice: "AGC061204" },
+  { nome: "STRUTTURA AGC 600X1400X300", codice: "AGC061403" },
+  { nome: "STRUTTURA AGC 800X1200X400", codice: "AGC081204" },
+  { nome: "STRUTTURA AGC 800X1400X300", codice: "AGC081403" },
+  { nome: "STRUTTURA AGC 800X1400X400", codice: "AGC081404" },
+  { nome: "STRUTTURA AGC 1000X1200X400", codice: "AGC101204" },
+  { nome: "STRUTTURA AGC 1000X1400X400", codice: "AGC101404" },
+  { nome: "STRUTTURA AGC 1200X1200X400", codice: "AGC121204" },
+  { nome: "STRUTTURA AGC 1200X1400X300", codice: "AGC121403" },
+  { nome: "STRUTTURA AGC 1200X1400X400", codice: "AGC121404" },
+  { nome: "STRUTTURA AGC 1400X1200X400", codice: "AGC141204" },
+  { nome: "STRUTTURA AGC 1400X1400X400", codice: "AGC141404" }
+];
+
+for (const agc of struttureAGCList) {
+  seedArticles.push({
+    nome: agc.nome,
+    codice: agc.codice,
+    famiglia: 'Strutture Agc'
+  });
+}
+
 const insertArticle = db.prepare('INSERT OR IGNORE INTO articles (nome, codice, famiglia) VALUES (?, ?, ?)');
 const insertProcess = db.prepare('INSERT OR IGNORE INTO processes (articolo_id) VALUES (?)');
 
@@ -1149,15 +1309,16 @@ try {
     // Rimuovi vecchie Porte AT senza tipo
     db.prepare("DELETE FROM articles WHERE famiglia = 'PORTE AT' AND nome NOT LIKE '% STD' AND nome NOT LIKE '% IB' AND nome NOT LIKE '% CB'").run();
 
+    const upsertArticle = db.prepare(`
+      INSERT INTO articles (nome, codice, famiglia) 
+      VALUES (?, ?, ?) 
+      ON CONFLICT(codice) DO UPDATE SET 
+        nome = excluded.nome, 
+        famiglia = excluded.famiglia
+    `);
+
     for (const art of seedArticles) {
-      const res = insertArticle.run(art.nome, art.codice, (art as any).famiglia || null);
-      if (res.changes === 0) {
-        // Update existing articles to ensure they have the correct name and family
-        db.prepare('UPDATE articles SET nome = ?, famiglia = ? WHERE codice = ?').run(art.nome, (art as any).famiglia || null, art.codice);
-      }
-      if (art.codice.startsWith('AGR')) {
-        // console.log(`Seeded/Updated AGR article: ${art.codice}`);
-      }
+      upsertArticle.run(art.nome, art.codice, (art as any).famiglia || null);
     }
     
     // Assicura che ogni articolo abbia una riga in processes
@@ -1186,14 +1347,14 @@ try {
       { name: '500x1000 cb', tag: 0, gre: 0, ver: 3, imp: 0, sco: 0 },
       { name: '500x1200 ib', tag: 0, gre: 3, ver: 1, imp: 0, sco: 0 },
       { name: '500x1200 cb', tag: 0, gre: 3, ver: 1, imp: 0, sco: 0 },
-      { name: '500x1400 ib', tag: 0, gre: 2, ver: 2, imp: 2, sco: 5 },
-      { name: '500x1400 cb', tag: 0, gre: 2, ver: 2, imp: 2, sco: 5 },
+      { name: '500x1400 ib', tag: 0, gre: 2, ver: 2, imp: 0, sco: 5 },
+      { name: '500x1400 cb', tag: 0, gre: 2, ver: 2, imp: 0, sco: 5 },
       { name: '500x1600 ib', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
       { name: '500x1600 cb', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
       { name: '500x1800 ib', tag: 0, gre: 6, ver: 4, imp: 0, sco: 3 },
       { name: '500x1800 cb', tag: 0, gre: 6, ver: 2, imp: 0, sco: 3 },
-      { name: '500x2000 ib', tag: 0, gre: 8, ver: 4, imp: 1, sco: 5 },
-      { name: '500x2000 cb', tag: 0, gre: 8, ver: 4, imp: 1, sco: 5 },
+      { name: '500x2000 ib', tag: 0, gre: 8, ver: 4, imp: 0, sco: 5 },
+      { name: '500x2000 cb', tag: 0, gre: 8, ver: 4, imp: 0, sco: 5 },
       { name: '500x2200 ib', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '500x2200 cb', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '600x800 ib', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
@@ -1206,55 +1367,62 @@ try {
       { name: '600x1400 cb', tag: 0, gre: 6, ver: 3, imp: 0, sco: 4 },
       { name: '600x1600 ib', tag: 0, gre: 0, ver: 1, imp: 0, sco: 2 },
       { name: '600x1600 cb', tag: 0, gre: 0, ver: 0, imp: 0, sco: 2 },
-      { name: '600x1800 ib', tag: 0, gre: 22, ver: 22, imp: 12, sco: 10 },
-      { name: '600x1800 cb', tag: 0, gre: 21, ver: 22, imp: 12, sco: 10 },
-      { name: '600x2000 ib', tag: 50, gre: 1, ver: 26, imp: 32, sco: 13 },
-      { name: '600x2000 cb', tag: 81, gre: 5, ver: 26, imp: 33, sco: 13 },
-      { name: '600x2200 ib', tag: 0, gre: 2, ver: 1, imp: 3, sco: 0 },
-      { name: '600x2200 cb', tag: 0, gre: 1, ver: 1, imp: 3, sco: 0 },
+      { name: '600x1800 ib', tag: 0, gre: 22, ver: 22, imp: 0, sco: 10 },
+      { name: '600x1800 cb', tag: 0, gre: 21, ver: 22, imp: 0, sco: 10 },
+      { name: '600x2000 ib', tag: 50, gre: 1, ver: 26, imp: 0, sco: 13 },
+      { name: '600x2000 cb', tag: 81, gre: 5, ver: 26, imp: 0, sco: 13 },
+      { name: '600x2200 ib', tag: 0, gre: 2, ver: 1, imp: 0, sco: 0 },
+      { name: '600x2200 cb', tag: 0, gre: 1, ver: 1, imp: 0, sco: 0 },
       { name: '700x800 ib', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '700x800 cb', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '700x1000 ib', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '700x1000 cb', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
-      { name: '700x1200 ib', tag: 0, gre: 2, ver: 4, imp: 4, sco: 0 },
-      { name: '700x1200 cb', tag: 0, gre: 2, ver: 4, imp: 4, sco: 0 },
+      { name: '700x1200 ib', tag: 0, gre: 2, ver: 4, imp: 0, sco: 0 },
+      { name: '700x1200 cb', tag: 0, gre: 2, ver: 4, imp: 0, sco: 0 },
       { name: '700x1400 ib', tag: 0, gre: 0, ver: 3, imp: 0, sco: 0 },
       { name: '700x1400 cb', tag: 0, gre: 0, ver: 3, imp: 0, sco: 0 },
-      { name: '700x1800 ib', tag: 0, gre: 2, ver: 2, imp: 2, sco: 0 },
-      { name: '700x1800 cb', tag: 0, gre: 2, ver: 2, imp: 2, sco: 0 },
+      { name: '700x1800 ib', tag: 0, gre: 2, ver: 2, imp: 0, sco: 0 },
+      { name: '700x1800 cb', tag: 0, gre: 2, ver: 2, imp: 0, sco: 0 },
       { name: '700x2000 ib', tag: 0, gre: 5, ver: 3, imp: 0, sco: 5 },
       { name: '700x2000 cb', tag: 0, gre: 5, ver: 3, imp: 0, sco: 5 },
       { name: '700x2200 ib', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '700x2200 cb', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
-      { name: '800x800 ib', tag: 0, gre: 0, ver: 1, imp: 1, sco: 0 },
-      { name: '800x800 cb', tag: 0, gre: 0, ver: 1, imp: 1, sco: 0 },
+      { name: '800x800 ib', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
+      { name: '800x800 cb', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
       { name: '800x1000 ib', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
       { name: '800x1000 cb', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
-      { name: '800x1200 ib', tag: 0, gre: 0, ver: 1, imp: 1, sco: 0 },
-      { name: '800x1200 cb', tag: 0, gre: 0, ver: 1, imp: 1, sco: 0 },
+      { name: '800x1200 ib', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
+      { name: '800x1200 cb', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
       { name: '800x1400 ib', tag: 0, gre: 0, ver: 3, imp: 0, sco: 0 },
       { name: '800x1400 cb', tag: 0, gre: 0, ver: 3, imp: 0, sco: 0 },
       { name: '800x1800 ib', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
       { name: '800x1800 cb', tag: 0, gre: 0, ver: 1, imp: 0, sco: 0 },
-      { name: '800x2000 ib', tag: 15, gre: 22, ver: 21, imp: 9, sco: 10 },
-      { name: '800x2000 cb', tag: 7, gre: 21, ver: 21, imp: 9, sco: 10 },
+      { name: '800x2000 ib', tag: 15, gre: 22, ver: 21, imp: 0, sco: 10 },
+      { name: '800x2000 cb', tag: 7, gre: 21, ver: 21, imp: 0, sco: 10 },
       { name: '800x2200 ib', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '800x2200 cb', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '1000x800 ib', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
       { name: '1000x800 cb', tag: 0, gre: 0, ver: 0, imp: 0, sco: 0 },
-      { name: '1000x1000 ib', tag: 0, gre: 0, ver: 4, imp: 4, sco: 0 },
-      { name: '1000x1000 cb', tag: 0, gre: 0, ver: 4, imp: 4, sco: 0 },
+      { name: '1000x1000 ib', tag: 0, gre: 0, ver: 4, imp: 0, sco: 0 },
+      { name: '1000x1000 cb', tag: 0, gre: 0, ver: 4, imp: 0, sco: 0 },
     ];
 
     const allArticles = db.prepare('SELECT id, nome, codice FROM articles').all() as any[];
     let updatedCount = 0;
 
+    const updateProcessStmt = db.prepare('UPDATE processes SET taglio = ?, piega = ?, verniciatura = ? WHERE articolo_id = ?');
+    const updateArticleStmt = db.prepare('UPDATE articles SET verniciati = ?, piega = ?, impegni_clienti = ?, scorta = ? WHERE id = ?');
+
+    // Pre-normalize article names and codes for faster matching
+    const normalizedArticles = allArticles.map(a => ({
+      id: a.id,
+      n: a.nome.toLowerCase(),
+      c: a.codice.toLowerCase()
+    }));
+
     for (const u of updates) {
       const searchName = u.name.toLowerCase();
-      const match = allArticles.find(a => {
-        const n = a.nome.toLowerCase();
-        const c = a.codice.toLowerCase();
-        
+      const match = normalizedArticles.find(a => {
         // Match LxH IB/CB format
         if (searchName.includes('ib') || searchName.includes('cb')) {
           const type = searchName.includes('ib') ? 'ib' : 'cb';
@@ -1262,18 +1430,18 @@ try {
           const [w, h] = dimsPart.split('x');
           
           // Check if article name contains dimensions (either 400x1200 or L400 and H1200)
-          const hasDims = n.includes(dimsPart) || (n.includes(`l${w}`) && n.includes(`h${h}`));
-          const hasType = n.includes(type === 'ib' ? 'in battuta' : 'con battuta') || c.endsWith(type.toUpperCase());
+          const hasDims = a.n.includes(dimsPart) || (a.n.includes(`l${w}`) && a.n.includes(`h${h}`));
+          const hasType = a.n.includes(type === 'ib' ? 'in battuta' : 'con battuta') || a.c.endsWith(type.toUpperCase());
           
           return hasDims && hasType;
         }
         
-        return n === searchName || n === 'porta ' + searchName || n.includes(searchName);
+        return a.n === searchName || a.n === 'porta ' + searchName || a.n.includes(searchName);
       });
 
       if (match) {
-        db.prepare('UPDATE processes SET taglio = ?, piega = ?, verniciatura = ? WHERE articolo_id = ?').run(u.tag, u.gre, u.ver, match.id);
-        db.prepare('UPDATE articles SET verniciati = ?, piega = ?, impegni_clienti = ?, scorta = ? WHERE id = ?').run(u.ver, u.gre, u.imp, u.sco, match.id);
+        updateProcessStmt.run(u.tag, u.gre, u.ver, match.id);
+        updateArticleStmt.run(u.ver, u.gre, u.imp, u.sco, match.id);
         updatedCount++;
       }
     }
@@ -1445,13 +1613,13 @@ try {
     */
     
     // Reset all commitments and impegni_clienti for a clean slate
-    try {
-      db.exec('DELETE FROM commitments');
-      db.exec('UPDATE articles SET impegni_clienti = 0');
-      console.log('Database cleared: commitments deleted, impegni_clienti reset.');
-    } catch (e) {
-      console.error("Error resetting commitments:", e);
-    }
+    // try {
+    //   db.exec('DELETE FROM commitments');
+    //   db.exec('UPDATE articles SET impegni_clienti = 0');
+    //   console.log('Database cleared: commitments deleted, impegni_clienti reset.');
+    // } catch (e) {
+    //   console.error("Error resetting commitments:", e);
+    // }
 
     // Migration to update old movement logs to the new 'Scarico' phase and 'scarico da commessa' type
     try {

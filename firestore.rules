@@ -102,6 +102,7 @@ service cloud.firestore {
         ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
           (request.auth.token.email in [
+            "fondatore@investortahashh10.com",
             "tahajb232@gmail.com",
             "lucaturati@gmail.com",
             "adeleturati@gmail.com",

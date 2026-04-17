@@ -38,15 +38,28 @@ const parseNote = (note?: string) => {
 };
 
 const codiciValidi = [
-  "AGR0304","AGR0305","AGR0306",
-  "AGR0404","AGR0405","AGR0406","AGR0408","AGR0410",
-  "AGR0604","AGR0605","AGR0606","AGR0608","AGR0610",
-  "AGR0804","AGR0805","AGR0806","AGR0808","AGR0810",
-  "AGR1004","AGR1005","AGR1006","AGR1008","AGR1010",
-  "AGR1204","AGR1205","AGR1206","AGR1208","AGR1210","AGR1212",
-  "AGR1404","AGR1405","AGR1406","AGR1408","AGR1410",
-  "AGR1604","AGR1605","AGR1606","AGR1608","AGR1610",
-  "AGR1804","AGR1805","AGR1806"
+  "AGR-STB0304", "AGR-STB0305", "AGR-STB0306", "AGR-STB0404",
+  "AGR-STB0405", "AGR-STB0406", "AGR-STB0408", "AGR-STB0410",
+  "AGR-STB0604", "AGR-STB0605", "AGR-STB0606", "AGR-STB0608",
+  "AGR-STB0610", "AGR-STB0804", "AGR-STB0805", "AGR-STB0806",
+  "AGR-STB0808", "AGR-STB0810", "AGR-STB1004", "AGR-STB1005",
+  "AGR-STB1006", "AGR-STB1008", "AGR-STB1010", "AGR-STB1204",
+  "AGR-STB1205", "AGR-STB1206", "AGR-STB1208", "AGR-STB1210",
+  "AGR-STB1212", "AGR-STB1404", "AGR-STB1405", "AGR-STB1406",
+  "AGR-STB1408", "AGR-STB1410", "AGR-STB1604", "AGR-STB1605",
+  "AGR-STB1606", "AGR-STB1608", "AGR-STB1610", "AGR-STB1804",
+  "AGR-STB1805", "AGR-STB1806",
+  "AGR-STT0304", "AGR-STT0305", "AGR-STT0306", "AGR-STT0404",
+  "AGR-STT0405", "AGR-STT0406", "AGR-STT0408", "AGR-STT0410",
+  "AGR-STT0604", "AGR-STT0605", "AGR-STT0606", "AGR-STT0608",
+  "AGR-STT0610", "AGR-STT0804", "AGR-STT0805", "AGR-STT0806",
+  "AGR-STT0808", "AGR-STT0810", "AGR-STT1004", "AGR-STT1005",
+  "AGR-STT1006", "AGR-STT1008", "AGR-STT1010", "AGR-STT1204",
+  "AGR-STT1205", "AGR-STT1206", "AGR-STT1208", "AGR-STT1210",
+  "AGR-STT1212", "AGR-STT1404", "AGR-STT1405", "AGR-STT1406",
+  "AGR-STT1408", "AGR-STT1410", "AGR-STT1604", "AGR-STT1605",
+  "AGR-STT1606", "AGR-STT1608", "AGR-STT1610", "AGR-STT1804",
+  "AGR-STT1805", "AGR-STT1806"
 ];
 
 export default function MagazzinoAGRView({ 
@@ -95,7 +108,7 @@ export default function MagazzinoAGRView({
   const [editingArticleId, setEditingArticleId] = useState<string | null>(null);
   const [movementForm, setMovementForm] = useState({
     articolo_id: '',
-    fase: 'saldatura' as 'saldatura' | 'verniciatura',
+    fase: 'saldatura' as any,
     tipo: 'carico' as 'carico' | 'scarico',
     quantita: 0
   });
@@ -115,32 +128,81 @@ export default function MagazzinoAGRView({
     }
 
     try {
-      const qtyToSend = Math.floor(movementForm.quantita / 2);
+      const selectedArt = articles.find(a => String(a.id) === String(movementForm.articolo_id));
+      if (!selectedArt) return;
 
-      if (qtyToSend <= 0) {
-        toast.error('La quantità deve essere almeno 2 per formare una struttura completa');
-        return;
-      }
+      const isAgrComp = selectedArt.codice?.startsWith('AGR-STB') || selectedArt.codice?.startsWith('AGR-STT');
+      
+      if (isAgrComp) {
+        const halfQty = Math.floor(movementForm.quantita / 2);
+        if (halfQty <= 0) {
+          toast.error('La quantità deve essere almeno 2 per essere divisa tra Base e Tetto');
+          return;
+        }
 
-      const response = await fetch('/api/movements', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          articolo_id: movementForm.articolo_id,
-          fase: movementForm.fase,
-          tipo: movementForm.tipo,
-          quantita: qtyToSend,
-          operatore: username
-        })
-      });
+        const prefix = selectedArt.codice?.startsWith('AGR-STB') ? 'AGR-STB' : 'AGR-STT';
+        const partnerPrefix = prefix === 'AGR-STB' ? 'AGR-STT' : 'AGR-STB';
+        const misura = selectedArt.codice?.replace(prefix, '');
+        const partnerCode = `${partnerPrefix}${misura}`;
+        const partnerArt = articles.find(a => a.codice === partnerCode);
 
-      if (response.ok) {
-        toast.success('Movimento registrato con successo');
-        setMovementForm({ ...movementForm, quantita: 0 });
-        onUpdate();
+        // Movement for selected
+        const res1 = await fetch('/api/movements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            articolo_id: selectedArt.id,
+            fase: movementForm.fase,
+            tipo: movementForm.tipo,
+            quantita: halfQty,
+            operatore: username
+          })
+        });
+
+        // Movement for partner
+        if (partnerArt) {
+          await fetch('/api/movements', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              articolo_id: partnerArt.id,
+              fase: movementForm.fase,
+              tipo: movementForm.tipo,
+              quantita: halfQty,
+              operatore: username
+            })
+          });
+        }
+
+        if (res1.ok) {
+          toast.success(`Movimento registrato: ${halfQty} per STB e ${halfQty} per STT`);
+          setMovementForm({ ...movementForm, quantita: 0 });
+          onUpdate();
+        } else {
+          const data = await res1.json();
+          toast.error(data.error || 'Errore durante la registrazione');
+        }
       } else {
-        const data = await response.json();
-        toast.error(data.error || 'Errore durante la registrazione');
+        const response = await fetch('/api/movements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            articolo_id: movementForm.articolo_id,
+            fase: movementForm.fase,
+            tipo: movementForm.tipo,
+            quantita: movementForm.quantita,
+            operatore: username
+          })
+        });
+
+        if (response.ok) {
+          toast.success('Movimento registrato con successo');
+          setMovementForm({ ...movementForm, quantita: 0 });
+          onUpdate();
+        } else {
+          const data = await response.json();
+          toast.error(data.error || 'Errore durante la registrazione');
+        }
       }
     } catch (error) {
       toast.error('Errore di connessione');
@@ -188,65 +250,25 @@ export default function MagazzinoAGRView({
   };
 
   const renderImpCell = (a: Article) => {
-    const isFrozen = frozenTooltipId === `${a.id}-imp`;
-    const articleCommitments = commitments.filter(c => String(c.articolo_id) === String(a.id) && c.stato_lavorazione !== 'Completato');
+    const articleCommitments = commitments.filter(c => String(c.articolo_id) === String(a.id) && c.stato_lavorazione !== 'Completato' && c.fase_produzione === 'Verniciatura');
     const tableImp = articleCommitments.reduce((sum, c) => sum + c.quantita, 0);
     const totalImpCount = Math.max(tableImp, a.impegni_clienti || 0);
 
-    const tooltipContent = totalImpCount > 0 && (
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 bg-slate-900 text-white p-3 rounded-xl shadow-2xl z-50 border border-slate-700 backdrop-blur-md">
-        <div className="flex items-center justify-between mb-2 border-b border-slate-700 pb-1">
-          <span className="text-[10px] font-black tracking-widest text-blue-400 uppercase">Dettaglio Impegni</span>
-          <span className="text-[10px] font-black text-white bg-blue-600 px-1.5 py-0.5 rounded-md">{totalImpCount} TOT</span>
-        </div>
-        {articleCommitments.length > 0 ? (
-          <ul className="space-y-1.5 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
-            {articleCommitments.map((c, idx) => {
-              const { month, additionalNote } = parseNote(c.note);
-              return (
-                <li key={idx} className="text-[10px] flex items-center justify-between gap-2 py-1 border-b border-slate-800/50 last:border-0 group">
-                  <div className="flex flex-col min-w-0">
-                    <span className="font-bold text-slate-200 truncate group-hover:text-blue-300 transition-colors">
-                      {c.commessa || 'N/D'} - {c.cliente || 'N/D'}
-                    </span>
-                    <span className="text-[9px] text-slate-400 flex items-center gap-1">
-                      <span className={clsx(
-                        "px-1 rounded-[2px] font-black",
-                        month === 'ALTRO' ? "bg-slate-700 text-slate-300" : "bg-emerald-900/50 text-emerald-400"
-                      )}>
-                        {month}
-                      </span>
-                      {additionalNote && <span className="text-emerald-400 ml-1 font-bold">N.B: {additionalNote}</span>}
-                    </span>
-                  </div>
-                  <span className="font-bold text-white whitespace-nowrap ml-2">{c.quantita} pz</span>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <div className="text-[10px] text-slate-400 italic py-2 text-center">
-            Impegni manuali: {a.impegni_clienti || 0}
-          </div>
-        )}
-        <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-t border-slate-700"></div>
-      </div>
-    );
+    const tooltipText = articleCommitments.length > 0 
+      ? articleCommitments.map(c => `${c.cliente} - ${c.commessa}: ${c.quantita}pz`).join('\n')
+      : undefined;
 
     return (
       <td 
         className="border-b border-r border-slate-200 p-1 text-center font-mono text-xs text-slate-600 relative group"
-        onMouseEnter={() => !frozenTooltipId && setFrozenTooltipId(`${a.id}-imp`)}
-        onMouseLeave={() => !isFrozen && setFrozenTooltipId(null)}
-        onClick={() => setFrozenTooltipId(isFrozen ? null : `${a.id}-imp`)}
+        title={tooltipText}
       >
         <span className={clsx(
-          "cursor-help transition-all",
-          totalImpCount > 0 ? "font-bold text-blue-600 underline decoration-dotted underline-offset-2" : ""
+          "transition-all",
+          totalImpCount > 0 ? "font-bold text-orange-600 cursor-help" : ""
         )}>
-          {totalImpCount}
+          {totalImpCount > 0 ? totalImpCount : ''}
         </span>
-        {frozenTooltipId === `${a.id}-imp` && tooltipContent}
       </td>
     );
   };
@@ -262,7 +284,7 @@ export default function MagazzinoAGRView({
       if (!matchesCategory) return false;
 
       // If commessa or cliente search is active, the article must have matching commitments
-      const articleCommitments = commitments.filter(c => c.articolo_id === a.id && c.stato_lavorazione !== 'Completato');
+      const articleCommitments = commitments.filter(c => c.articolo_id === a.id && c.stato_lavorazione !== 'Completato' && c.fase_produzione === 'Verniciatura');
       
       const matchesCommessa = !debouncedCommessa || articleCommitments.some(c => 
         (c.commessa || '').toLowerCase().includes(debouncedCommessa.toLowerCase())
@@ -464,7 +486,9 @@ export default function MagazzinoAGRView({
                 .filter(a => codiciValidi.includes(a.codice || ''))
                 .sort((a, b) => (a.codice || '').localeCompare(b.codice || ''))
                 .map(a => (
-                <option key={a.id} value={a.id}>{a.codice} - {a.nome}</option>
+                <option key={a.id} value={a.id}>
+                  {a.codice} - {a.nome?.replace('BASE', '').replace('TETTO', '').replace(/\s+/g, ' ').trim()}
+                </option>
               ))}
             </select>
           </div>
@@ -473,7 +497,7 @@ export default function MagazzinoAGRView({
             <select 
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 outline-none transition-all"
               value={movementForm.fase}
-              onChange={(e) => setMovementForm({ ...movementForm, fase: e.target.value as 'saldatura' | 'verniciatura' })}
+              onChange={(e) => setMovementForm({ ...movementForm, fase: e.target.value as any })}
             >
               <option value="saldatura">SALD.</option>
               <option value="verniciatura">VER.</option>
@@ -569,7 +593,7 @@ export default function MagazzinoAGRView({
                             value={editFormData.nome} 
                             onChange={(e) => setEditFormData({...editFormData, nome: e.target.value})}
                           />
-                        ) : a.nome}
+                        ) : a.nome?.replace('BASE', '').replace('TETTO', '').replace(/\s+/g, ' ').trim()}
                       </td>
                       <td className="border-b border-r border-slate-200 p-1 text-[10px] font-mono font-medium text-slate-500">
                         {isEditing ? (
@@ -581,10 +605,7 @@ export default function MagazzinoAGRView({
                           />
                         ) : a.codice}
                       </td>
-                      <td className={clsx(
-                        "border-b border-r border-slate-200 p-1 text-center font-mono text-xs",
-                        !saldaturaEnabled ? "bg-slate-100 text-slate-300" : "text-slate-600"
-                      )}>
+                      <td className="border-b border-r border-slate-200 p-1 text-center font-mono text-xs text-slate-600">
                         {isEditing ? (
                           <input 
                             type="number" 

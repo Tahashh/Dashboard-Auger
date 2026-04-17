@@ -1,14 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import Draggable from 'react-draggable';
 import { Article, Process, Commitment, Macchina5000, TaglioLaser, FaseTaglio } from '../types';
-import { fetchArticles, fetchProcesses, fetchCommitments, updateArticle, updateProcess, fetchMacchina5000, fetchTaglioLaser, fetchFaseTaglio, addFaseTaglio, fetchCasseComplete, updateCassaCompleta } from '../api';
-import { getCategory, getDisponibilita } from '../utils';
+import { fetchArticles, fetchProcesses, fetchCommitments, updateArticle, updateProcess, fetchMacchina5000, fetchTaglioLaser, fetchFaseTaglio, addFaseTaglio, fetchCasseComplete, updateCassaCompleta, assemblaggioCassaAT, sendChatMessage } from '../api';
+import { getCategory, getDisponibilita, getCassaComponents } from '../utils';
 import { toast } from 'react-hot-toast';
-import { Save, X, Edit2, Scissors, Play, CheckCircle, AlertCircle, Search } from 'lucide-react';
+import { Save, X, Edit2, Scissors, Play, CheckCircle, AlertCircle, Search, Users, Package } from 'lucide-react';
 import clsx from 'clsx';
-
-interface CasseATViewProps {
-  username: string;
-}
 
 const mesi = ['GENNAIO', 'FEBBRAIO', 'MARZO', 'APRILE', 'MAGGIO', 'GIUGNO', 'LUGLIO', 'AGOSTO', 'SETTEMBRE', 'OTTOBRE', 'NOVEMBRE', 'DICEMBRE'];
 const parseNote = (note?: string) => {
@@ -19,14 +16,88 @@ const parseNote = (note?: string) => {
     if (mesi.includes(firstPart)) {
       return { month: firstPart, additionalNote: parts.slice(1).join(' - ') };
     }
-  } else {
-    const noteUpper = note.toUpperCase();
-    if (mesi.includes(noteUpper)) {
-      return { month: noteUpper, additionalNote: '' };
-    }
   }
+  const upperNote = note.toUpperCase();
+  const foundMonth = mesi.find(m => upperNote.includes(m));
+  if (foundMonth) return { month: foundMonth, additionalNote: note };
   return { month: 'ALTRO', additionalNote: note };
 };
+
+const AGMPopup = ({ title, commitments, onClose, popupRef, align = 'center' }: { title: string, commitments: any[], onClose: () => void, popupRef: React.RefObject<HTMLDivElement>, align?: 'center' | 'right' }) => {
+  // Group by month
+  const grouped = commitments.reduce((acc: any, c: any) => {
+    const { month } = parseNote(c.note);
+    if (!acc[month]) acc[month] = [];
+    acc[month].push(c);
+    return acc;
+  }, {});
+
+  // Sort months based on the mesi array
+  const sortedMonths = Object.keys(grouped).sort((a, b) => {
+    const indexA = mesi.indexOf(a);
+    const indexB = mesi.indexOf(b);
+    if (indexA === -1) return 1;
+    if (indexB === -1) return -1;
+    return indexA - indexB;
+  });
+
+  return (
+    <div 
+      ref={popupRef}
+      className={clsx(
+        "absolute top-full mt-2 z-[100] w-72 bg-slate-900 text-white text-[10px] rounded-lg shadow-2xl p-3 border border-slate-700 animate-in fade-in zoom-in-95 duration-200",
+        align === 'right' ? "right-0" : "left-1/2 transform -translate-x-1/2"
+      )}
+    >
+      <div className="font-bold border-b border-slate-700 pb-2 mb-2 text-emerald-400 flex justify-between items-center">
+        <span>Dettaglio Impegni {title}:</span>
+        <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded-full transition-colors">
+          <X className="w-3 h-3 text-slate-400" />
+        </button>
+      </div>
+      <div className="space-y-4 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
+        {sortedMonths.map(month => (
+          <div key={month} className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="h-px flex-1 bg-slate-700"></div>
+              <span className="text-[8px] font-bold text-slate-500 tracking-wider uppercase">{month}</span>
+              <div className="h-px flex-1 bg-slate-700"></div>
+            </div>
+            {grouped[month].map((c: any) => {
+              const { additionalNote } = parseNote(c.note);
+              return (
+                <div key={c.id} className="bg-slate-800/30 p-2 rounded border border-slate-800/50">
+                  <div className="flex justify-between items-start mb-1">
+                    <span className="font-bold text-slate-100 truncate pr-2">{c.cliente}</span>
+                    <span className="font-bold text-amber-400 whitespace-nowrap">{c.quantita} pz</span>
+                  </div>
+                  <div className="flex flex-col gap-0.5 text-slate-400">
+                    <div className="flex justify-between">
+                      <span>Commessa: {c.commessa}</span>
+                    </div>
+                    {additionalNote && <div className="text-emerald-400 font-bold italic">N.B: {additionalNote}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 pt-2 border-t border-slate-700 flex justify-between font-bold text-xs">
+        <span>Totale:</span>
+        <span className="text-amber-400">{commitments.reduce((sum, c) => sum + c.quantita, 0)} pz</span>
+      </div>
+      <div className={clsx(
+        "absolute -top-1 w-2 h-2 bg-slate-900 rotate-45 border-l border-t border-slate-700",
+        align === 'right' ? "right-4" : "left-1/2 -translate-x-1/2"
+      )}></div>
+    </div>
+  );
+};
+
+interface CasseATViewProps {
+  username: string;
+}
 
 export default function CasseATView({ username }: CasseATViewProps) {
   const [piastre, setPiastre] = useState<any[]>([]);
@@ -34,6 +105,10 @@ export default function CasseATView({ username }: CasseATViewProps) {
   const [involucri, setInvolucri] = useState<any[]>([]);
   const [casseComplete, setCasseComplete] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const sentAlerts = useRef<Set<string>>(new Set());
+  const isFetching = useRef(false);
+  const [articlesState, setArticlesState] = useState<any[]>([]);
+  const [processesState, setProcessesState] = useState<any[]>([]);
 
   // Machine state
   const [macchina5000, setMacchina5000] = useState<Macchina5000[]>([]);
@@ -64,6 +139,19 @@ export default function CasseATView({ username }: CasseATViewProps) {
   const [asmQ, setAsmQ] = useState<number>(1);
 
   const [frozenTooltipId, setFrozenTooltipId] = useState<string | null>(null);
+  const [activePopupId, setActivePopupId] = useState<string | null>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const draggableNodeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (popupRef.current && !popupRef.current.contains(event.target as Node)) {
+        setActivePopupId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const isAndrea = username === 'Andrea';
   const isOsvaldo = username === 'Osvaldo';
@@ -74,104 +162,22 @@ export default function CasseATView({ username }: CasseATViewProps) {
   const canAutoCut = isAndrea || isOsvaldo || isLucaTurati || isRobertoBonalumi || isAdeleTurati || isDeveloper;
   const canUseAutoCut = isLucaTurati || isRobertoBonalumi || isAdeleTurati || isDeveloper;
 
-  const renderPhaseCell = (item: any, value: number, field: string, phase: 'Verniciatura' | 'Grezzo' | 'Taglio' | 'Saldatura', isEditing: boolean, editData: any, handleInputChange: (field: string, value: any) => void) => {
+  const renderPhaseCell = (item: any, value: number, field: string, phase: 'Verniciatura' | 'Grezzo' | 'Taglio' | 'Saldatura', isEditing: boolean, editData: any, handleInputChange: (field: string, value: any) => void, famiglia: string) => {
     const isNegative = value < 0;
-    const isFrozen = frozenTooltipId === `${item.id}-${phase}-imp`;
-    const articleCommitments = (item.commitments || []).filter((c: any) => c.fase_produzione === phase);
-    const impCount = articleCommitments.reduce((sum: number, c: any) => sum + c.quantita, 0);
-
-    const tooltipContent = !isEditing && articleCommitments.length > 0 && (() => {
-      const grouped = articleCommitments.reduce((acc: any, c: any) => {
-        const { month } = parseNote(c.note);
-        if (!acc[month]) acc[month] = [];
-        acc[month].push(c);
-        return acc;
-      }, {});
-
-      const sortedMonths = Object.keys(grouped).sort((a, b) => {
-        const indexA = mesi.indexOf(a);
-        const indexB = mesi.indexOf(b);
-        if (indexA === -1 && indexB === -1) return a.localeCompare(b);
-        if (indexA === -1) return 1;
-        if (indexB === -1) return -1;
-        return indexA - indexB;
-      });
-
-      return (
-        <div className={clsx(
-          "absolute top-full left-1/2 transform -translate-x-1/2 mt-2 z-50 w-72 bg-slate-900 text-white text-[10px] rounded-lg shadow-xl p-3 border border-slate-700 pointer-events-auto",
-          isFrozen ? "block" : "hidden group-hover:block"
-        )}>
-          <div className="font-bold border-b border-slate-700 pb-2 mb-2 text-emerald-400 flex justify-between items-center">
-            <div className="flex flex-col">
-              <span>Dettaglio Impegni {phase}:</span>
-              {isFrozen && <span className="text-[8px] text-amber-400 animate-pulse">MODALITÀ BLOCCO ATTIVA</span>}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] text-slate-400 font-normal italic">Raggruppati per mese</span>
-              {isFrozen && (
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setFrozenTooltipId(null);
-                  }}
-                  className="p-1 hover:bg-slate-800 rounded-full transition-colors"
-                >
-                  <X className="w-3 h-3 text-slate-400" />
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="space-y-3 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-            {sortedMonths.map(month => (
-              <div key={month} className="space-y-1">
-                <div className="text-amber-400 font-bold uppercase tracking-wider border-b border-slate-800 pb-0.5 mb-1 flex justify-between items-center">
-                  <span>{month}</span>
-                  <span className="text-[8px] font-normal text-slate-500">
-                    {grouped[month].reduce((sum: number, c: any) => sum + c.quantita, 0)} pz
-                  </span>
-                </div>
-                <ul className="text-left space-y-1.5">
-                  {grouped[month].map((c: any) => {
-                    const { additionalNote } = parseNote(c.note);
-                    return (
-                      <li key={c.id} className="flex justify-between items-start border-b border-slate-800/50 pb-1 last:border-0">
-                        <div className="flex flex-col truncate pr-2">
-                          <span className="font-bold text-slate-100">{c.cliente}</span>
-                          <span className="text-[9px] text-slate-400">
-                            Commessa: {c.commessa}
-                            {additionalNote && <span className="text-emerald-400 ml-1 font-bold">N.B: {additionalNote}</span>}
-                          </span>
-                        </div>
-                        <span className="font-bold text-amber-400 whitespace-nowrap pt-0.5">{c.quantita} pz</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 pt-2 border-t border-slate-700 flex justify-between font-bold text-xs">
-            <span>Totale Impegni:</span>
-            <span className="text-amber-400">{impCount} pz</span>
-          </div>
-          <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-t border-slate-700"></div>
-        </div>
-      );
-    })();
+    const phaseCommitments = (item.commitments || []).filter((c: any) => {
+      if (phase === 'Grezzo') return c.fase_produzione === 'Grezzo' || c.fase_produzione === 'Piega';
+      return c.fase_produzione === phase;
+    });
+    
+    // Determine if this phase should have a popup (intermediate phases only)
+    const isFinal = famiglia === 'PIASTRE AT' ? (phase === 'Grezzo') : (phase === 'Verniciatura');
+    const hasCommitments = !isFinal && phaseCommitments.length > 0;
 
     return (
       <td 
-        onClick={() => {
-          if (!isEditing && impCount > 0) {
-            setFrozenTooltipId(isFrozen ? null : `${item.id}-${phase}-imp`);
-          }
-        }}
         className={clsx(
-          "border-b border-r border-slate-200 p-1 text-center font-mono text-xs relative group cursor-help transition-all",
-          isNegative && !isEditing ? "bg-red-500 text-white font-bold" : "text-slate-600",
-          !isEditing && impCount > 0 && "bg-orange-50 text-orange-700 font-bold hover:bg-orange-100",
-          isFrozen && "ring-2 ring-inset ring-amber-400 bg-amber-50"
+          "border-b border-r border-slate-200 p-1 text-center font-mono text-xs relative group transition-all",
+          isNegative && !isEditing ? "bg-red-500 text-white font-bold" : "text-slate-600"
         )}
       >
         {isEditing ? (
@@ -182,21 +188,45 @@ export default function CasseATView({ username }: CasseATViewProps) {
             onChange={(e) => handleInputChange(field, parseInt(e.target.value) || 0)}
           />
         ) : (
-          <>
-            {value}
-            {tooltipContent}
-          </>
+          <div 
+            className={clsx(
+              "flex flex-col items-center justify-center leading-tight min-h-[24px]",
+              hasCommitments ? "text-orange-600 cursor-pointer hover:underline font-bold" : ""
+            )}
+            onClick={() => {
+              if (hasCommitments) {
+                setActivePopupId(activePopupId === `${item.id}-${phase}` ? null : `${item.id}-${phase}`);
+              }
+            }}
+          >
+            <span>{value}</span>
+          </div>
+        )}
+
+        {activePopupId === `${item.id}-${phase}` && hasCommitments && (
+          <AGMPopup 
+            title={phase === 'Saldatura' ? 'SALD' : (phase === 'Taglio' ? 'TAG' : (phase === 'Grezzo' ? 'GRE' : phase))} 
+            commitments={phaseCommitments} 
+            onClose={() => setActivePopupId(null)} 
+            popupRef={popupRef} 
+            align={famiglia === 'INVOLUCRI AT' ? 'right' : 'center'}
+          />
         )}
       </td>
     );
   };
 
-  const renderImpCell = (item: any, phase: 'Verniciatura' | 'Grezzo' | 'Taglio' | 'Saldatura' = 'Verniciatura') => {
+  const renderImpCell = (item: any, phase: 'Verniciatura' | 'Grezzo' | 'Taglio' | 'Saldatura' | 'Tutte' = 'Verniciatura', showValue: boolean = true, showTooltip: boolean = true, isDraggable: boolean = false) => {
     const isFrozen = frozenTooltipId === `${item.id}-${phase}-imp`;
-    const articleCommitments = (item.commitments || []).filter((c: any) => c.fase_produzione === phase);
-    const totalImpCount = phase === 'Verniciatura' ? item.imp : (phase === 'Grezzo' ? item.impGrezzo : (phase === 'Taglio' ? item.impTaglio : item.impSald));
+    const articleCommitments = phase === 'Tutte' 
+      ? (item.commitments || []) 
+      : (item.commitments || []).filter((c: any) => phase === 'Grezzo' ? (c.fase_produzione === 'Piega' || c.fase_produzione === 'Grezzo') : c.fase_produzione === phase);
+    
+    const totalImpCount = phase === 'Tutte' 
+      ? item.imp 
+      : (phase === 'Verniciatura' ? item.imp : (phase === 'Grezzo' ? item.imp : (phase === 'Taglio' ? item.impTaglio : item.impSald)));
 
-    const tooltipContent = articleCommitments.length > 0 && (() => {
+    const tooltipContent = showTooltip && articleCommitments.length > 0 && (() => {
       const grouped = articleCommitments.reduce((acc: any, c: any) => {
         const { month } = parseNote(c.note);
         if (!acc[month]) acc[month] = [];
@@ -213,14 +243,15 @@ export default function CasseATView({ username }: CasseATViewProps) {
         return indexA - indexB;
       });
 
-      return (
+      const content = (
         <div className={clsx(
-          "absolute top-full left-1/2 transform -translate-x-1/2 mt-2 z-50 w-72 bg-slate-900 text-white text-[10px] rounded-lg shadow-xl p-3 border border-slate-700 pointer-events-auto",
+          "absolute top-full mt-2 z-50 w-72 bg-slate-900 text-white text-[10px] rounded-lg shadow-xl p-3 border border-slate-700 pointer-events-auto",
+          isDraggable ? "right-0" : "left-1/2 transform -translate-x-1/2",
           isFrozen ? "block" : "hidden group-hover:block"
         )}>
-          <div className="font-bold border-b border-slate-700 pb-2 mb-2 text-emerald-400 flex justify-between items-center">
+          <div className={clsx("font-bold border-b border-slate-700 pb-2 mb-2 text-emerald-400 flex justify-between items-center", isDraggable && isFrozen && "cursor-move")}>
             <div className="flex flex-col">
-              <span>Dettaglio Impegni {phase}:</span>
+              <span>Dettaglio Impegni {phase === 'Tutte' ? 'Totali' : phase}:</span>
               {isFrozen && <span className="text-[8px] text-amber-400 animate-pulse">MODALITÀ BLOCCO ATTIVA</span>}
             </div>
             <div className="flex items-center gap-2">
@@ -271,25 +302,41 @@ export default function CasseATView({ username }: CasseATViewProps) {
             <span>Totale Impegni:</span>
             <span className="text-amber-400">{totalImpCount} pz</span>
           </div>
-          <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-t border-slate-700"></div>
+          <div className={clsx(
+            "absolute -top-1 w-2 h-2 bg-slate-900 rotate-45 border-l border-t border-slate-700",
+            isDraggable ? "right-4" : "left-1/2 -translate-x-1/2"
+          )}></div>
         </div>
       );
+
+      if (isDraggable && isFrozen) {
+        return (
+          <Draggable nodeRef={draggableNodeRef} handle=".cursor-move">
+            <div ref={draggableNodeRef} className="absolute z-[100] pointer-events-auto">
+              {content}
+            </div>
+          </Draggable>
+        );
+      }
+
+      return content;
     })();
 
     return (
       <td 
         onClick={() => {
-          if (totalImpCount > 0) {
+          if (showTooltip && totalImpCount > 0) {
             setFrozenTooltipId(isFrozen ? null : `${item.id}-${phase}-imp`);
           }
         }}
         className={clsx(
-          "border-b border-r border-slate-200 p-1 text-center font-mono text-xs relative group cursor-help transition-all",
+          "border-b border-r border-slate-200 p-1 text-center font-mono text-xs relative group",
+          showTooltip && totalImpCount > 0 ? "cursor-help" : "cursor-default",
           totalImpCount > 0 ? "bg-orange-50 text-orange-700 font-bold hover:bg-orange-100" : "text-slate-400",
           isFrozen && "ring-2 ring-inset ring-amber-400 bg-amber-50"
         )}
       >
-        {totalImpCount > 0 ? totalImpCount : ''}
+        {showValue && totalImpCount > 0 ? totalImpCount : ''}
         {tooltipContent}
       </td>
     );
@@ -297,17 +344,26 @@ export default function CasseATView({ username }: CasseATViewProps) {
 
   const renderCassaImpCell = (cassa: any) => {
     const isFrozen = frozenTooltipId === `cassa-${cassa.id}-imp`;
-    const cassaCommitments = (commitmentsState || []).filter(c => c.articolo_codice === cassa.articolo && c.stato_lavorazione !== 'Completato');
-    const totalImpCount = cassa.impegni || 0;
+    const cassaCommitments = (commitmentsState || []).filter(c => 
+      (c.articolo_codice === cassa.articolo || c.articolo_nome === cassa.articolo) && 
+      c.stato_lavorazione !== 'Completato'
+    );
+    
+    // Calculate components for the tooltip
+    const components = getCassaComponents(cassa.articolo);
+    
+    // Total from commitments table to ensure consistency
+    const tableImpCount = cassaCommitments.reduce((sum, c) => sum + (c.quantita || 0), 0);
+    const totalImpCount = Math.max(tableImpCount, cassa.impegni || 0);
 
-    const tooltipContent = cassaCommitments.length > 0 && (
+    const tooltipContent = totalImpCount > 0 && (
       <div className={clsx(
-        "absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 z-50 w-72 bg-slate-900 text-white text-[10px] rounded-lg shadow-xl p-3 border border-slate-700 pointer-events-auto",
+        "absolute top-full left-1/2 transform -translate-x-1/2 mt-2 z-50 w-80 bg-slate-900 text-white text-[10px] rounded-lg shadow-xl p-3 border border-slate-700 pointer-events-auto",
         isFrozen ? "block" : "hidden group-hover:block"
       )}>
         <div className="font-bold border-b border-slate-700 pb-2 mb-2 text-emerald-400 flex justify-between items-center">
           <div className="flex flex-col">
-            <span>Dettaglio Impegni:</span>
+            <span>Dettaglio Impegni Cassa:</span>
             {isFrozen && <span className="text-[8px] text-amber-400 animate-pulse">MODALITÀ BLOCCO ATTIVA</span>}
           </div>
           <div className="flex items-center gap-2">
@@ -324,30 +380,58 @@ export default function CasseATView({ username }: CasseATViewProps) {
             )}
           </div>
         </div>
-        <div className="space-y-3 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-          <ul className="text-left space-y-1.5">
-            {cassaCommitments.map((c: any) => {
-              const { additionalNote } = parseNote(c.note);
-              return (
-                <li key={c.id} className="flex justify-between items-start border-b border-slate-800/50 pb-1 last:border-0">
-                  <div className="flex flex-col truncate pr-2">
-                    <span className="font-bold text-slate-100">{c.cliente}</span>
-                    <span className="text-[9px] text-slate-400">
-                      Commessa: {c.commessa}
-                      {additionalNote && <span className="text-emerald-400 ml-1 font-bold">N.B: {additionalNote}</span>}
-                    </span>
+        
+        <div className="space-y-4 max-h-80 overflow-y-auto pr-1 custom-scrollbar">
+          {/* Component Composition */}
+          {components.length > 0 && (
+            <div className="bg-slate-800/50 p-2 rounded border border-slate-700">
+              <div className="text-[9px] text-slate-400 uppercase font-black mb-2 flex items-center gap-2">
+                <Package className="w-3 h-3" /> Composizione Componenti
+              </div>
+              <div className="space-y-1">
+                {components.map((comp, idx) => (
+                  <div key={idx} className="flex justify-between items-center text-[10px]">
+                    <span className="text-slate-300">{comp.nome}</span>
+                    <span className="text-emerald-400 font-bold">1 pz / cassa</span>
                   </div>
-                  <span className="font-bold text-amber-400 whitespace-nowrap pt-0.5">{c.quantita} pz</span>
-                </li>
-              );
-            })}
-          </ul>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* List of commitments */}
+          {cassaCommitments.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[9px] text-slate-400 uppercase font-black px-1">Ordini Correnti</div>
+              <ul className="text-left space-y-1.5">
+                {cassaCommitments.map((c: any) => {
+                  const { month, additionalNote } = parseNote(c.note);
+                  return (
+                    <li key={c.id} className="bg-slate-800/30 p-2 rounded border border-slate-800/50">
+                      <div className="flex justify-between items-start mb-0.5">
+                        <span className="font-bold text-slate-100">{c.cliente}</span>
+                        <span className="font-bold text-amber-400 whitespace-nowrap">{c.quantita} pz</span>
+                      </div>
+                      <div className="flex flex-col gap-0.5 text-slate-400">
+                        <div className="flex justify-between items-center">
+                          <span>Commessa: {c.commessa}</span>
+                          <span className="text-[8px] text-slate-500">{month}</span>
+                        </div>
+                        {additionalNote && <div className="text-emerald-400 font-bold italic">N.B: {additionalNote}</div>}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
         </div>
-        <div className="mt-2 pt-2 border-t border-slate-700 flex justify-between font-bold text-xs">
+
+        <div className="mt-3 pt-2 border-t border-slate-700 flex justify-between font-bold text-xs bg-slate-900/50">
           <span>Totale Impegni:</span>
           <span className="text-amber-400">{totalImpCount} pz</span>
         </div>
-        <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 rotate-45 border-r border-b border-slate-700"></div>
+        <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 rotate-45 border-l border-t border-slate-700"></div>
       </div>
     );
 
@@ -360,7 +444,7 @@ export default function CasseATView({ username }: CasseATViewProps) {
         }}
         className={clsx(
           "border-b border-r border-slate-200 p-1 text-center font-mono text-xs relative group cursor-help transition-all",
-          totalImpCount > 0 ? "bg-orange-50 text-orange-700 font-bold hover:bg-orange-100" : "text-slate-400",
+          totalImpCount > 0 ? "bg-orange-50 text-orange-800 font-bold hover:bg-orange-100" : "text-slate-400",
           isFrozen && "ring-2 ring-inset ring-amber-400 bg-amber-50"
         )}
       >
@@ -371,6 +455,8 @@ export default function CasseATView({ username }: CasseATViewProps) {
   };
 
   const fetchData = async () => {
+    if (isFetching.current) return;
+    isFetching.current = true;
     try {
       const [articles, processes, commitments, m5000, tLaser, fTaglio, casseCompleteData] = await Promise.all([
         fetchArticles(),
@@ -387,6 +473,8 @@ export default function CasseATView({ username }: CasseATViewProps) {
       setFaseTaglio(fTaglio);
       setCasseComplete(casseCompleteData);
       setCommitmentsState(commitments);
+      setArticlesState(articles);
+      setProcessesState(processes);
 
       const mapData = (famiglia: string) => {
         const mapped = articles
@@ -394,13 +482,18 @@ export default function CasseATView({ username }: CasseATViewProps) {
           .map(a => {
             const p = processes.find(proc => proc.articolo_id === a.id) || { taglio: 0, piega: 0, saldatura: 0, verniciatura: 0 };
             const articleCommitments = commitments.filter(c => c.articolo_id === a.id && c.stato_lavorazione !== 'Completato');
-            const impVern = articleCommitments.filter(c => c.fase_produzione === 'Verniciatura').reduce((sum, c) => sum + c.quantita, 0);
-            const impGrezzo = articleCommitments.filter(c => c.fase_produzione === 'Grezzo').reduce((sum, c) => sum + c.quantita, 0);
             const impTaglio = articleCommitments.filter(c => c.fase_produzione === 'Taglio').reduce((sum, c) => sum + c.quantita, 0);
             const impSald = articleCommitments.filter(c => c.fase_produzione === 'Saldatura').reduce((sum, c) => sum + c.quantita, 0);
+            const impGrezzo = articleCommitments.filter(c => c.fase_produzione === 'Grezzo' || c.fase_produzione === 'Piega').reduce((sum, c) => sum + c.quantita, 0);
+            const impVern = articleCommitments.filter(c => c.fase_produzione === 'Verniciatura').reduce((sum, c) => sum + c.quantita, 0);
             
-            const tableImp = articleCommitments.reduce((sum, c) => sum + c.quantita, 0);
-            const totalImp = Math.max(tableImp, a.impegni_clienti || 0);
+            const totalImp = Math.max(
+              articleCommitments.filter(c => {
+                if (famiglia === 'PIASTRE AT') return c.fase_produzione === 'Piega' || c.fase_produzione === 'Grezzo';
+                return c.fase_produzione === 'Verniciatura' || c.fase_produzione === 'Generico';
+              }).reduce((sum, c) => sum + (c.quantita || 0), 0),
+              a.impegni_clienti || 0
+            );
 
             return {
               id: a.id,
@@ -411,11 +504,13 @@ export default function CasseATView({ username }: CasseATViewProps) {
               sald: p.saldatura || 0,
               vern: a.verniciati || 0,
               mag: a.scorta || 0,
-              tot: (famiglia === 'PIASTRE AT' ? (p.piega || 0) : (a.verniciati || 0)) - totalImp,
+              tot: (famiglia === 'PIASTRE AT' ? (a.piega || 0) : (a.verniciati || 0)) - totalImp,
               imp: totalImp,
-              impGrezzo,
               impTaglio,
               impSald,
+              impGrezzo,
+              impVern,
+              famiglia,
               commitments: articleCommitments,
               articleData: a,
               processData: p
@@ -442,15 +537,102 @@ export default function CasseATView({ username }: CasseATViewProps) {
           return dimsA.p - dimsB.p;
         });
       };
+      
+      const piastreMapped = mapData('PIASTRE AT');
+      const porteMapped = mapData('PORTE AT');
+      const involucriMapped = mapData('INVOLUCRI AT');
 
-      setPiastre(mapData('PIASTRE AT'));
-      setPorte(mapData('PORTE AT'));
-      setInvolucri(mapData('INVOLUCRI AT'));
+      setPiastre(piastreMapped);
+      setPorte(porteMapped);
+      setInvolucri(involucriMapped);
+
+      // Trigger automations
+      checkAutomations(piastreMapped, porteMapped, involucriMapped, fTaglio);
     } catch (error) {
       console.error('Error fetching Casse AT data:', error);
       toast.error('Errore nel caricamento dei dati Casse AT');
     } finally {
       setLoading(false);
+      isFetching.current = false;
+    }
+  };
+
+  const checkAutomations = async (piastreData: any[], porteData: any[], involucriData: any[], currentFaseTaglio: any[]) => {
+    let triggered = false;
+
+    const hasPendingRequest = (articolo: string) => {
+      return currentFaseTaglio.some(f => f.articolo === articolo && f.fatto === 0);
+    };
+
+    const sendAlert = async (articleName: string, message: string, alertKey: string) => {
+      if (sentAlerts.current.has(alertKey)) return;
+      sentAlerts.current.add(alertKey); // Add immediately to prevent concurrent triggers
+      
+      try {
+        await sendChatMessage('SISTEMA', `@RobertoBonalumi: ${message} per ${articleName}`);
+        console.log(`Alert sent: ${message} for ${articleName}`);
+      } catch (e) {
+        console.error('Error sending alert message:', e);
+      }
+    };
+
+    const autoSendToTaglio = async (item: any) => {
+      const alertKey = `${item.articolo}-auto-taglio`;
+      if (hasPendingRequest(item.articolo)) return;
+      if (sentAlerts.current.has(alertKey)) return;
+      sentAlerts.current.add(alertKey); // Add immediately
+
+      try {
+        await addFaseTaglio({
+          lavorazione_per: 'Casse AT',
+          articolo: item.articolo,
+          quantita: 50, // Default quantity for auto-send
+          data: new Date().toISOString().split('T')[0],
+          odl: 'AUTO',
+          commessa: 'SISTEMA',
+          fatto: 0,
+          stampato: 0,
+          macchina: 'Macchina 5000'
+        });
+        toast(`Invio automatico a RidaTecnico: ${item.articolo} (50 pz)`, { icon: 'ℹ️' });
+        triggered = true;
+      } catch (e) {
+        console.error('Error sending auto-taglio request:', e);
+      }
+    };
+
+    const automationPromises: Promise<any>[] = [];
+
+    // 1. PIASTRE AT
+    piastreData.forEach(item => {
+      // if (item.tag < 50) {
+      //   automationPromises.push(sendAlert(item.articolo, 'PIASTRE AT < 50 tagliate -> piegarle', `${item.articolo}-piegare-piastre`));
+      // }
+    });
+
+    // 2. PORTE AT
+    porteData.forEach(item => {
+      // if (item.vern < 50 && item.gre > 0) {
+      //   automationPromises.push(sendAlert(item.articolo, 'PORTE AT < 50 verniciate -> verniciare', `${item.articolo}-verniciare-porte`));
+      // }
+
+      // if (item.gre < 50 && item.tag > 0) {
+      //   automationPromises.push(sendAlert(item.articolo, 'PORTE AT < 50 non piegate -> piegarle', `${item.articolo}-piegare-porte`));
+      // }
+    });
+
+    // 3. INVOLUCRI AT
+    involucriData.forEach(item => {
+      // No automatic alerts for involucri at the moment
+    });
+
+    await Promise.all(automationPromises);
+
+    if (triggered) {
+      // Refresh data once after all automations are done, but avoid recursion by calling it after a short delay or using a flag
+      // Actually, since we use isFetching.current, we can just call fetchData() and it will be queued or skipped if still running.
+      // But it's better to just wait a bit and refresh.
+      setTimeout(() => fetchData(), 1000);
     }
   };
 
@@ -484,24 +666,33 @@ export default function CasseATView({ username }: CasseATViewProps) {
           totale: quantita - impegni
         });
       } else {
-        const { articleData, processData, tag, gre, sald, vern, mag } = editData;
+        const { id, articolo, codice, tag, gre, sald, vern, mag } = editData;
         
-        // Update process
-        await updateProcess(processData.id, {
-          ...processData,
-          taglio: tag,
-          piega: gre,
-          saldatura: sald
-        });
+        // Find the actual article and process to update
+        const articleToUpdate = articlesState.find(a => a.id === id);
+        const processToUpdate = processesState.find(p => p.articolo_id === id);
 
-        // Update article
-        await updateArticle(articleData.id, {
-          ...articleData,
-          nome: editData.articolo,
-          codice: editData.codice,
-          verniciati: vern,
-          scorta: mag
-        });
+        if (articleToUpdate) {
+          // Update article
+          await updateArticle(articleToUpdate.id, {
+            ...articleToUpdate,
+            nome: articolo,
+            codice: codice,
+            verniciati: vern,
+            piega: gre,
+            scorta: mag
+          });
+        }
+
+        if (processToUpdate) {
+          // Update process
+          await updateProcess(processToUpdate.id, {
+            ...processToUpdate,
+            taglio: tag,
+            piega: gre,
+            saldatura: sald
+          });
+        }
       }
 
       toast.success('Dati aggiornati con successo');
@@ -570,90 +761,13 @@ export default function CasseATView({ username }: CasseATViewProps) {
         return;
       }
 
-      // Find Piastra
-      const piastraName = `PIASTRA AT ${L}X${H}`;
-      const piastra = piastre.find(p => p.articolo === piastraName);
-
-      // Find Involucro
-      const invName = `INVOLUCRO AT ${L}X${H}X${P}`;
-      const inv = involucri.find(i => i.articolo === invName);
-
-      // Find Porte
-      const porteTypes = L >= 800 ? ['IB', 'CB'] : ['STD'];
-      const porteToUpdate = porteTypes.map(type => {
-        const pName = `PORTA AT ${L}X${H} ${type}`;
-        return porte.find(p => p.articolo === pName);
-      });
-
-      // Find Cassa Completa
-      const cassaName = `CASSA AT COMPL. ${L}X${H}X${P}`;
-      const cassa = casseComplete.find(c => c.articolo === cassaName);
-
-      if (!piastra) {
-        toast.error(`Piastra non trovata: ${piastraName}`);
-        return;
-      }
-      if (!inv) {
-        toast.error(`Involucro non trovato: ${invName}`);
-        return;
-      }
-      if (porteToUpdate.some(p => !p)) {
-        toast.error(`Una o più porte non trovate per ${L}X${H}`);
-        return;
-      }
-      if (!cassa) {
-        toast.error(`Cassa completa non trovata in magazzino: ${cassaName}`);
-        return;
-      }
-
-      // Check availability
-      if (inv.vern < Q) {
-        toast.error(`Involucri VERN insufficienti (${inv.vern} < ${Q})`);
-        return;
-      }
-      if (piastra.gre < Q) {
-        toast.error(`Piastre GRE insufficienti (${piastra.gre} < ${Q})`);
-        return;
-      }
-      for (const p of porteToUpdate) {
-        if (p!.vern < Q) {
-          toast.error(`Porte ${p!.articolo} VERN insufficienti (${p!.vern} < ${Q})`);
-          return;
-        }
-      }
-
-      // Update Involucro
-      await updateArticle(inv.articleData.id, {
-        ...inv.articleData,
-        verniciati: inv.vern - Q
-      });
-
-      // Update Piastra
-      await updateProcess(piastra.processData.id, {
-        ...piastra.processData,
-        piega: piastra.gre - Q
-      });
-
-      // Update Porte
-      for (const p of porteToUpdate) {
-        await updateArticle(p!.articleData.id, {
-          ...p!.articleData,
-          verniciati: p!.vern - Q
-        });
-      }
-
-      // Update Cassa Completa
-      await updateCassaCompleta(cassa.id, {
-        quantita: cassa.quantita + Q,
-        impegni: cassa.impegni,
-        totale: (cassa.quantita + Q) - cassa.impegni
-      });
+      await assemblaggioCassaAT({ L, H, P, Q });
 
       toast.success('Cassa prodotta con successo!');
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Errore durante l\'assemblaggio:', error);
-      toast.error('Errore durante l\'assemblaggio');
+      toast.error(error.message || 'Errore durante l\'assemblaggio');
     }
   };
 
@@ -686,6 +800,7 @@ export default function CasseATView({ username }: CasseATViewProps) {
                   {canAutoCut && <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8">Auto</th>}
                   <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8">TAG.</th>
                   <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8">GRE.</th>
+                  <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8 text-amber-600">Imp.</th>
                   <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8">Tot.</th>
                   {isDeveloper && <th className="px-1 py-2 font-semibold border-b border-slate-300 text-center w-10">Azioni</th>}
                 </tr>
@@ -693,7 +808,7 @@ export default function CasseATView({ username }: CasseATViewProps) {
               <tbody className="bg-white divide-y divide-slate-200">
                 {piastre.map((item) => {
                   const isEditing = editingTable === 'piastre' && editingId === item.id;
-                  const total = item.tot;
+                  const total = item.gre - (item.imp || 0);
                   return (
                     <tr key={item.id} className="h-12 hover:bg-slate-50 transition-colors">
                       <td className="border-b border-r border-slate-200 p-1 text-center">
@@ -716,7 +831,10 @@ export default function CasseATView({ username }: CasseATViewProps) {
                           </div>
                         ) : (
                           <div className="flex flex-col">
-                            <span className="text-[11px] font-bold text-slate-700">{item.articolo || '-'}</span>
+                            <span className={clsx(
+                              "text-[11px] font-bold",
+                              total < 0 ? "text-amber-500" : "text-slate-700"
+                            )}>{item.articolo || '-'}</span>
                             <span className="text-[9px] text-slate-400 font-mono">{item.codice || '-'}</span>
                           </div>
                         )}
@@ -796,11 +914,12 @@ export default function CasseATView({ username }: CasseATViewProps) {
                           })()}
                         </td>
                       )}
-                      {renderPhaseCell(item, item.tag, 'tag', 'Taglio', isEditing, editData, handleInputChange)}
-                      {renderPhaseCell(item, item.gre, 'gre', 'Grezzo', isEditing, editData, handleInputChange)}
+                      {renderPhaseCell(item, item.tag, 'tag', 'Taglio', isEditing, editData, handleInputChange, 'PIASTRE AT')}
+                      {renderPhaseCell(item, item.gre, 'gre', 'Grezzo', isEditing, editData, handleInputChange, 'PIASTRE AT')}
+                      {renderImpCell(item, 'Grezzo', true, true)}
                       <td className={clsx(
                         "border-b border-r border-slate-200 p-1 text-center font-mono text-xs font-bold",
-                        total < 0 ? "text-white bg-red-500" : "text-blue-600"
+                        total < 0 ? "text-red-500 bg-red-50" : "text-emerald-600 bg-emerald-50"
                       )}>
                         {total}
                       </td>
@@ -846,7 +965,7 @@ export default function CasseATView({ username }: CasseATViewProps) {
               <tbody className="bg-white divide-y divide-slate-200">
                 {porte.map((item) => {
                   const isEditing = editingTable === 'porte' && editingId === item.id;
-                  const total = item.tot;
+                  const total = item.vern - (item.imp || 0);
                   return (
                     <tr key={item.id} className="h-12 hover:bg-slate-50 transition-colors">
                       <td className="border-b border-r border-slate-200 p-1 text-center">
@@ -869,7 +988,10 @@ export default function CasseATView({ username }: CasseATViewProps) {
                           </div>
                         ) : (
                           <div className="flex flex-col">
-                            <span className="text-[11px] font-bold text-slate-700">{item.articolo || '-'}</span>
+                            <span className={clsx(
+                              "text-[11px] font-bold",
+                              total < 0 ? "text-amber-500" : "text-slate-700"
+                            )}>{item.articolo || '-'}</span>
                             <span className="text-[9px] text-slate-400 font-mono">{item.codice || '-'}</span>
                           </div>
                         )}
@@ -949,15 +1071,13 @@ export default function CasseATView({ username }: CasseATViewProps) {
                           })()}
                         </td>
                       )}
-                      {renderPhaseCell(item, item.tag, 'tag', 'Taglio', isEditing, editData, handleInputChange)}
-                      {renderPhaseCell(item, item.gre, 'gre', 'Grezzo', isEditing, editData, handleInputChange)}
-                      {renderPhaseCell(item, item.vern, 'vern', 'Verniciatura', isEditing, editData, handleInputChange)}
-                      <td className="border-b border-r border-slate-200 p-1 text-center font-mono text-xs text-amber-600 font-bold">
-                        {item.imp}
-                      </td>
+                      {renderPhaseCell(item, item.tag, 'tag', 'Taglio', isEditing, editData, handleInputChange, 'PORTE AT')}
+                      {renderPhaseCell(item, item.gre, 'gre', 'Grezzo', isEditing, editData, handleInputChange, 'PORTE AT')}
+                      {renderPhaseCell(item, item.vern, 'vern', 'Verniciatura', isEditing, editData, handleInputChange, 'PORTE AT')}
+                      {renderImpCell(item, 'Verniciatura', true, true)}
                       <td className={clsx(
                         "border-b border-r border-slate-200 p-1 text-center font-mono text-xs font-bold",
-                        total < 0 ? "text-white bg-red-500" : "text-blue-600"
+                        total < 0 ? "text-red-500 bg-red-50" : "text-emerald-600 bg-emerald-50"
                       )}>
                         {total}
                       </td>
@@ -998,14 +1118,13 @@ export default function CasseATView({ username }: CasseATViewProps) {
                   <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8">VERN.</th>
                   <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8 text-amber-600">Imp.</th>
                   <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8">Tot.</th>
-                  <th className="px-1 py-2 font-semibold border-b border-r border-slate-300 text-center w-8">Mag.</th>
                   {isDeveloper && <th className="px-1 py-2 font-semibold border-b border-slate-300 text-center w-10">Azioni</th>}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-slate-200">
                 {involucri.map((item) => {
                   const isEditing = editingTable === 'involucro' && editingId === item.id;
-                  const total = item.tot;
+                  const total = item.vern - (item.imp || 0);
                   return (
                     <tr key={item.id} className="h-12 hover:bg-slate-50 transition-colors">
                       <td className="border-b border-r border-slate-200 p-1 text-center">
@@ -1028,7 +1147,10 @@ export default function CasseATView({ username }: CasseATViewProps) {
                           </div>
                         ) : (
                           <div className="flex flex-col">
-                            <span className="text-[11px] font-bold text-slate-700">{item.articolo || '-'}</span>
+                            <span className={clsx(
+                              "text-[11px] font-bold",
+                              total < 0 ? "text-amber-500" : "text-slate-700"
+                            )}>{item.articolo || '-'}</span>
                             <span className="text-[9px] text-slate-400 font-mono">{item.codice || '-'}</span>
                           </div>
                         )}
@@ -1108,28 +1230,16 @@ export default function CasseATView({ username }: CasseATViewProps) {
                           })()}
                         </td>
                       )}
-                      {renderPhaseCell(item, item.tag, 'tag', 'Taglio', isEditing, editData, handleInputChange)}
-                      {renderPhaseCell(item, item.gre, 'gre', 'Grezzo', isEditing, editData, handleInputChange)}
-                      {renderPhaseCell(item, item.sald, 'sald', 'Saldatura', isEditing, editData, handleInputChange)}
-                      {renderPhaseCell(item, item.vern, 'vern', 'Verniciatura', isEditing, editData, handleInputChange)}
-                      <td className="border-b border-r border-slate-200 p-1 text-center font-mono text-xs text-amber-600 font-bold">
-                        {item.imp}
-                      </td>
+                      {renderPhaseCell(item, item.tag, 'tag', 'Taglio', isEditing, editData, handleInputChange, 'INVOLUCRI AT')}
+                      {renderPhaseCell(item, item.gre, 'gre', 'Grezzo', isEditing, editData, handleInputChange, 'INVOLUCRI AT')}
+                      {renderPhaseCell(item, item.sald, 'sald', 'Saldatura', isEditing, editData, handleInputChange, 'INVOLUCRI AT')}
+                      {renderPhaseCell(item, item.vern, 'vern', 'Verniciatura', isEditing, editData, handleInputChange, 'INVOLUCRI AT')}
+                      {renderImpCell(item, 'Verniciatura', true, true, true)}
                       <td className={clsx(
                         "border-b border-r border-slate-200 p-1 text-center font-mono text-xs font-bold",
-                        total < 0 ? "text-white bg-red-500" : "text-blue-600"
+                        total < 0 ? "text-red-500 bg-red-50" : "text-emerald-600 bg-emerald-50"
                       )}>
                         {total}
-                      </td>
-                      <td className="border-b border-r border-slate-200 p-1 text-center font-mono text-xs text-slate-600">
-                        {isEditing ? (
-                          <input 
-                            type="number" 
-                            className="w-full text-center border rounded p-0.5" 
-                            value={editData.mag} 
-                            onChange={(e) => handleInputChange('mag', parseInt(e.target.value) || 0)}
-                          />
-                        ) : item.mag}
                       </td>
                       {isDeveloper && (
                         <td className="border-b border-slate-200 p-1 text-center">
@@ -1163,7 +1273,7 @@ export default function CasseATView({ username }: CasseATViewProps) {
               <tr>
                 <th className="px-4 py-2 font-semibold border-b border-r border-slate-300 text-left">ARTICOLO</th>
                 <th className="px-2 py-2 font-semibold border-b border-r border-slate-300 text-center w-24">QUANTITÀ</th>
-                <th className="px-2 py-2 font-semibold border-b border-r border-slate-300 text-center w-24">IMPEGNI</th>
+                <th className="px-2 py-2 font-semibold border-b border-r border-slate-300 text-center w-24">IMP</th>
                 <th className="px-2 py-2 font-semibold border-b border-slate-300 text-center w-24">TOTALE</th>
                 {isDeveloper && <th className="px-2 py-2 font-semibold border-b border-slate-300 text-center w-16">AZIONI</th>}
               </tr>
@@ -1174,7 +1284,10 @@ export default function CasseATView({ username }: CasseATViewProps) {
                 const isEditing = editingTable === 'casseComplete' && editingId === item.id;
                 return (
                   <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="border-b border-r border-slate-200 px-4 py-1.5 font-medium text-slate-800 text-xs truncate">
+                    <td className={clsx(
+                      "border-b border-r border-slate-200 px-4 py-1.5 font-medium text-xs truncate",
+                      isNegative ? "text-amber-500" : "text-slate-800"
+                    )}>
                       {item.articolo}
                     </td>
                     <td className="border-b border-r border-slate-200 p-1 text-center font-mono text-xs text-slate-600">
@@ -1199,7 +1312,7 @@ export default function CasseATView({ username }: CasseATViewProps) {
                     ) : renderCassaImpCell(item)}
                     <td className={clsx(
                       "border-b border-slate-200 p-1 text-center font-mono text-xs font-bold",
-                      isNegative ? "bg-red-500 text-white" : "text-blue-600"
+                      isNegative ? "text-red-500 bg-red-50" : "text-emerald-600 bg-emerald-50"
                     )}>
                       {isEditing ? (editData.quantita - editData.impegni) : item.totale}
                     </td>

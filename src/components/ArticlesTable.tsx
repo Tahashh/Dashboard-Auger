@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Article, Process, Commitment } from '../types';
 import { Plus, Trash2, Edit2, Check, X, Search } from 'lucide-react';
 import clsx from 'clsx';
-import { getDisponibilita } from '../utils';
+import { getDisponibilita, getCategory } from '../utils';
 import ConfirmModal from './ConfirmModal';
 import { addArticle, updateArticle, deleteArticle, updateProcess } from '../api';
 import toast from 'react-hot-toast';
@@ -62,6 +62,13 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
     });
 
   const handleAdd = async () => {
+    // Check if article already exists locally first
+    const exists = articles.some(a => (a.codice || '').trim().toUpperCase() === (formData.codice || '').trim().toUpperCase());
+    if (exists) {
+      toast.error('Codice articolo già esistente');
+      return;
+    }
+
     try {
       await addArticle(formData);
       setIsAdding(false);
@@ -149,7 +156,7 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
           process?.taglio || 0,
           process?.piega || 0,
           process?.saldatura || 0,
-          a.nome.toLowerCase().includes('piastre') ? (a.piega || 0) : a.verniciati,
+          (a.nome || '').toLowerCase().includes('piastre') ? (a.piega || 0) : a.verniciati,
           a.impegni_clienti,
           getDisponibilita(a, commitments)
         ].join(',');
@@ -282,7 +289,12 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
                   />
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-slate-700">
-                  {commitments.filter(c => String(c.articolo_id) === '0' && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0)}
+                  {(() => {
+                    const category = getCategory(formData.nome, formData.codice);
+                    const isPiastra = category.toLowerCase().includes('piastre');
+                    const targetPhase = isPiastra ? 'Piega' : 'Verniciatura';
+                    return commitments.filter(c => String(c.articolo_id) === '0' && c.stato_lavorazione !== 'Completato' && c.fase_produzione === targetPhase).reduce((sum, c) => sum + c.quantita, 0);
+                  })()}
                 </td>
                 <td className="px-4 py-2 text-right font-mono font-bold text-slate-400">
                   {getDisponibilita({ id: '0', nome: formData.nome, codice: formData.codice, verniciati: formData.verniciati, impegni_clienti: formData.impegni_clienti, piega: formData.piega, scorta: formData.scorta }, commitments)}
@@ -330,7 +342,12 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
                       />
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-slate-700">
-                      {commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0)}
+                      {(() => {
+                        const category = getCategory(article.nome, article.codice);
+                        const isPiastra = category.toLowerCase().includes('piastre');
+                        const targetPhase = isPiastra ? 'Piega' : 'Verniciatura';
+                        return commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato' && c.fase_produzione === targetPhase).reduce((sum, c) => sum + c.quantita, 0);
+                      })()}
                     </td>
                     <td className="px-4 py-2 text-right font-mono font-bold text-slate-400">
                       {getDisponibilita({...article, verniciati: formData.verniciati, impegni_clienti: formData.impegni_clienti, piega: formData.piega, scorta: formData.scorta}, commitments)}
@@ -358,28 +375,32 @@ export default function ArticlesTable({ articles, commitments, processes, onUpda
                   </td>
                   <td className={clsx(
                     "px-4 py-3 text-right font-mono",
-                    (article.nome.toLowerCase().includes('piastre') ? article.piega : article.verniciati) < 0 ? "text-red-600 font-bold" : "text-slate-700"
+                    ((article.nome || '').toLowerCase().includes('piastre') ? article.piega : article.verniciati) < 0 ? "text-red-600 font-bold" : "text-slate-700"
                   )}>
-                    {article.nome.toLowerCase().includes('piastre') ? (article.piega || 0) : article.verniciati}
+                    {(article.nome || '').toLowerCase().includes('piastre') ? (article.piega || 0) : article.verniciati}
                   </td>
                   <td className={clsx(
                     "px-4 py-3 text-right font-mono",
                     (() => {
-                      const tableImp = commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
+                      const category = getCategory(article.nome, article.codice);
+                      const isPiastra = category.toLowerCase().includes('piastre');
+                      const targetPhase = isPiastra ? 'Piega' : 'Verniciatura';
+                      const tableImp = commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato' && c.fase_produzione === targetPhase).reduce((sum, c) => sum + c.quantita, 0);
                       const totalImp = Math.max(tableImp, article.impegni_clienti || 0);
                       return totalImp < 0 ? "text-red-600 font-bold" : "text-slate-700";
                     })()
                   )}>
                     {(() => {
-                      const tableImp = commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato').reduce((sum, c) => sum + c.quantita, 0);
+                      const category = getCategory(article.nome, article.codice);
+                      const isPiastra = category.toLowerCase().includes('piastre');
+                      const targetPhase = isPiastra ? 'Piega' : 'Verniciatura';
+                      const tableImp = commitments.filter(c => String(c.articolo_id) === String(article.id) && c.stato_lavorazione !== 'Completato' && c.fase_produzione === targetPhase).reduce((sum, c) => sum + c.quantita, 0);
                       return Math.max(tableImp, article.impegni_clienti || 0);
                     })()}
                   </td>
                   <td className={clsx(
                     "px-4 py-3 text-right font-mono font-bold",
-                    isNegative && "text-red-500",
-                    isPositive && "text-emerald-500",
-                    disponibilita === 0 && "text-slate-400"
+                    isNegative ? "text-red-500 bg-red-50" : "text-emerald-600 bg-emerald-50",
                   )}>
                     {disponibilita}
                   </td>

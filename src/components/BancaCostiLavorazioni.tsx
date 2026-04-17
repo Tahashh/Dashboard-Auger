@@ -60,11 +60,11 @@ const BancaCostiLavorazioni: React.FC = () => {
   const filteredArticles = useMemo(() => {
     return articles.filter(art => {
       // Filter by Codice
-      if (searchCodice && !art.codice.toLowerCase().includes(searchCodice.toLowerCase())) {
+      if (searchCodice && !(art.codice || '').toLowerCase().includes(searchCodice.toLowerCase())) {
         return false;
       }
       // Filter by Nome
-      if (searchNome && !art.nome.toLowerCase().includes(searchNome.toLowerCase())) {
+      if (searchNome && !(art.nome || '').toLowerCase().includes(searchNome.toLowerCase())) {
         return false;
       }
 

@@ -25,6 +25,10 @@ export default function FaseTaglioView({ articles, username, onUpdate }: FaseTag
   const [inlineEditingId, setInlineEditingId] = useState<string | null>(null);
   const [inlineFormData, setInlineFormData] = useState<any>(null);
   
+  const displayRows = username === 'RidaTecnico' 
+    ? rows.filter(r => !r.articolo.toUpperCase().includes('CASSA AT COMPL.'))
+    : rows;
+
   const [formData, setFormData] = useState({
     lavorazione_per: '',
     articolo: '',
@@ -632,14 +636,14 @@ export default function FaseTaglioView({ articles, username, onUpdate }: FaseTag
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.length === 0 ? (
+                {displayRows.length === 0 ? (
                   <tr>
                     <td colSpan={11} className="px-6 py-8 text-center text-slate-500">
                       Nessuna registrazione presente
                     </td>
                   </tr>
                 ) : (
-                  rows.map((row) => {
+                  displayRows.map((row) => {
                     const isInlineEditing = inlineEditingId === row.id;
                     const isDeveloper = username === 'TahaDev';
 
@@ -820,8 +824,8 @@ export default function FaseTaglioView({ articles, username, onUpdate }: FaseTag
                         </div>
                       </td>
                     </tr>
-                  )})
-                )}
+                  )
+                }))}
               </tbody>
             </table>
           </div>

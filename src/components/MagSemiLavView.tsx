@@ -13,6 +13,7 @@ export default function MagSemiLavView() {
   const [traverse, setTraverse] = useState<Traverse[]>([]);
   const [loading, setLoading] = useState(true);
   const [caricoForm, setCaricoForm] = useState({ tipo: 'forata', misura: 300, quantita: 0 });
+  const [scaricoForm, setScaricoForm] = useState({ tipo: 'forata', misura: 300, quantita: 0 });
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState({ tipo: '', misura: 0, quantita: 0 });
 
@@ -33,6 +34,10 @@ export default function MagSemiLavView() {
   }, []);
 
   const handleCarico = async () => {
+    if (caricoForm.quantita <= 0) {
+      toast.error("Inserisci una quantità valida");
+      return;
+    }
     try {
       const res = await fetch('/api/traverse/carico', {
         method: 'POST',
@@ -41,9 +46,34 @@ export default function MagSemiLavView() {
       });
       if (res.ok) {
         toast.success("Carico effettuato");
+        setCaricoForm({ ...caricoForm, quantita: 0 });
         fetchData();
       } else {
         toast.error("Errore nel carico");
+      }
+    } catch (error) {
+      toast.error("Errore di connessione");
+    }
+  };
+
+  const handleScarico = async () => {
+    if (scaricoForm.quantita <= 0) {
+      toast.error("Inserisci una quantità valida");
+      return;
+    }
+    try {
+      const res = await fetch('/api/traverse/scarico', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scaricoForm)
+      });
+      if (res.ok) {
+        toast.success("Scarico effettuato");
+        setScaricoForm({ ...scaricoForm, quantita: 0 });
+        fetchData();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Errore nello scarico");
       }
     } catch (error) {
       toast.error("Errore di connessione");
@@ -94,25 +124,113 @@ export default function MagSemiLavView() {
 
   return (
     <div className="p-6 space-y-8 bg-slate-50 min-h-screen">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
+            <PlusCircle className="h-6 w-6 text-emerald-600" />
+            Carico Traverse
+          </h2>
+          <div className="space-y-4">
+            <div className="flex gap-4">
+              <div className="flex-1">
+                <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 ml-1">Tipo</label>
+                <select 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all"
+                  value={caricoForm.tipo}
+                  onChange={(e) => setCaricoForm({ ...caricoForm, tipo: e.target.value })}
+                >
+                  <option value="forata">Forata</option>
+                  <option value="cieca">Cieca</option>
+                  <option value="tetto">Trav. Tetto</option>
+                  <option value="TRA. LAT. AGS">TRA. LAT. AGS</option>
+                </select>
+              </div>
+              <div className="w-32">
+                <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 ml-1">Misura (mm)</label>
+                <input 
+                  type="number" 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all"
+                  value={caricoForm.misura}
+                  onChange={(e) => setCaricoForm({ ...caricoForm, misura: parseInt(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 ml-1">Quantità</label>
+              <input 
+                type="number" 
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all"
+                value={caricoForm.quantita}
+                onChange={(e) => setCaricoForm({ ...caricoForm, quantita: parseInt(e.target.value) || 0 })}
+              />
+            </div>
+            <button 
+              onClick={handleCarico}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20"
+            >
+              <PlusCircle className="h-5 w-5" />
+              REGISTRA CARICO
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
+            <Trash2 className="h-6 w-6 text-red-600" />
+            Scarico Traverse
+          </h2>
+          <div className="space-y-4">
+            <div className="flex gap-4">
+              <div className="flex-1">
+                <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 ml-1">Tipo</label>
+                <select 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500/20 outline-none transition-all"
+                  value={scaricoForm.tipo}
+                  onChange={(e) => setScaricoForm({ ...scaricoForm, tipo: e.target.value })}
+                >
+                  <option value="forata">Forata</option>
+                  <option value="cieca">Cieca</option>
+                  <option value="tetto">Trav. Tetto</option>
+                  <option value="TRA. LAT. AGS">TRA. LAT. AGS</option>
+                </select>
+              </div>
+              <div className="w-32">
+                <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 ml-1">Misura (mm)</label>
+                <input 
+                  type="number" 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500/20 outline-none transition-all"
+                  value={scaricoForm.misura}
+                  onChange={(e) => setScaricoForm({ ...scaricoForm, misura: parseInt(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 ml-1">Quantità</label>
+              <input 
+                type="number" 
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500/20 outline-none transition-all"
+                value={scaricoForm.quantita}
+                onChange={(e) => setScaricoForm({ ...scaricoForm, quantita: parseInt(e.target.value) || 0 })}
+              />
+            </div>
+            <button 
+              onClick={handleScarico}
+              className="w-full bg-red-600 hover:bg-red-700 text-white font-black py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-red-600/20"
+            >
+              <Trash2 className="h-5 w-5" />
+              REGISTRA SCARICO
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-        <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
-          <Package className="h-6 w-6 text-blue-600" />
-          Mag. Semi Lav. D'acquisto (Traverse)
-        </h2>
-        
-        <div className="flex gap-4 items-center mb-8 bg-slate-50 p-4 rounded-xl border border-slate-200">
-          <select value={caricoForm.tipo} onChange={(e) => setCaricoForm({...caricoForm, tipo: e.target.value})} className="border border-slate-300 rounded-lg p-2">
-            <option value="forata">Forata</option>
-            <option value="cieca">Cieca</option>
-            <option value="tetto1">Tetto 1</option>
-            <option value="tetto2">Tetto 2</option>
-          </select>
-          <input type="number" value={caricoForm.misura} onChange={(e) => setCaricoForm({...caricoForm, misura: parseInt(e.target.value) || 0})} placeholder="Misura" className="border border-slate-300 rounded-lg p-2 w-24" />
-          <input type="number" value={caricoForm.quantita} onChange={(e) => setCaricoForm({...caricoForm, quantita: parseInt(e.target.value) || 0})} placeholder="Quantità" className="border border-slate-300 rounded-lg p-2 w-24" />
-          <button onClick={handleCarico} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2">
-            <PlusCircle className="h-4 w-4" /> Carica
-          </button>
-          <button onClick={fetchData} className="text-slate-500 hover:text-slate-800">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
+            <Package className="h-6 w-6 text-blue-600" />
+            Inventario Traverse
+          </h2>
+          <button onClick={fetchData} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500">
             <RefreshCw className="h-5 w-5" />
           </button>
         </div>
@@ -138,8 +256,8 @@ export default function MagSemiLavView() {
                     >
                       <option value="forata">Forata</option>
                       <option value="cieca">Cieca</option>
-                      <option value="tetto1">Tetto 1</option>
-                      <option value="tetto2">Tetto 2</option>
+                      <option value="tetto">Trav. Tetto</option>
+                      <option value="TRA. LAT. AGS">TRA. LAT. AGS</option>
                     </select>
                   ) : (
                     t.tipo

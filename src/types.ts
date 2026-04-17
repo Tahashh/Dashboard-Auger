@@ -14,6 +14,7 @@ export interface Article {
   prezzo_gommatura?: number;
   prezzo_montaggio?: number;
   prezzo_vendita?: number;
+  is_blocked?: number;
 }
 
 export interface Process {
@@ -78,9 +79,10 @@ export interface InvolucroAT {
   tot: number;
 }
 
-export const AUTHORIZED_USERS = ['RobertoBonalumi', 'LucaTurati', 'AdeleTurati', 'RidaTecnico', 'ElenaTurati'];
+export const AUTHORIZED_USERS = ['fondatore@investortahashh10.com', 'RobertoBonalumi', 'LucaTurati', 'AdeleTurati', 'RidaTecnico', 'ElenaTurati'];
 
 export const USERS = [
+  { username: "fondatore@investortahashh10.com", password: "Auger2014", role: "admin" },
   { username: "LucaTurati", password: "Auger2014", role: "admin" },
   { username: "AdeleTurati", password: "Auger2014", role: "admin" },
   { username: "RobertoBonalumi", password: "Auger2014", role: "admin" },
